@@ -1,0 +1,173 @@
+from __future__ import annotations
+
+import json
+import logging
+import re
+from typing import Any
+
+import requests
+
+from app.config import Settings
+
+logger = logging.getLogger(__name__)
+
+
+SYSTEM_PROMPT = """
+Voce e um assistente RAG estrito.
+Regras absolutas:
+1) Use SOMENTE as evidencias fornecidas.
+2) Cada claim precisa de pelo menos uma citacao valida usando source_id.
+3) Toda claim deve estar diretamente ligada ao foco da pergunta.
+4) Se nao houver evidencia suficiente, retorne not_found=true.
+5) Nao invente fatos nem fontes.
+6) Seja conciso e objetivo.
+7) Retorne JSON puro, sem markdown.
+""".strip()
+
+
+JSON_SCHEMA_HINT = {
+    "not_found": "boolean",
+    "synopsis": "string",
+    "key_points": ["string"],
+    "suggested_qa": [
+        {
+            "question": "string",
+            "answer": "string",
+            "citations": [{"source_id": "string", "quote": "string"}],
+        }
+    ],
+    "claims": [
+        {
+            "claim_id": "string",
+            "text": "string",
+            "citations": [{"source_id": "string", "quote": "string"}],
+        }
+    ],
+}
+
+
+class LLMService:
+    def __init__(self, settings: Settings):
+        self.settings = settings
+
+    def generate_answer(
+        self,
+        question: str,
+        evidences: list[dict[str, Any]],
+        focus_terms: list[str] | None = None,
+        coverage_request: bool = False,
+        retry_mode: bool = False,
+    ) -> dict[str, Any]:
+        prompt = self._build_user_prompt(
+            question,
+            evidences,
+            focus_terms=focus_terms or [],
+            coverage_request=coverage_request,
+            retry_mode=retry_mode,
+        )
+        payload = {
+            "model": self.settings.model,
+            "system": SYSTEM_PROMPT,
+            "prompt": prompt,
+            "stream": False,
+            "format": "json",
+            "options": {
+                "temperature": self.settings.temperature,
+                "num_ctx": self.settings.num_ctx,
+            },
+        }
+        response = requests.post(
+            f"{self.settings.ollama_base_url}/api/generate",
+            json=payload,
+            timeout=120,
+        )
+        response.raise_for_status()
+        raw = response.json().get("response", "")
+        parsed = self._parse_json(raw)
+        if parsed is None:
+            logger.warning("LLM returned non-JSON response. Returning fallback not_found.")
+            return {"not_found": True}
+        return parsed
+
+    def _build_user_prompt(
+        self,
+        question: str,
+        evidences: list[dict[str, Any]],
+        focus_terms: list[str],
+        coverage_request: bool,
+        retry_mode: bool = False,
+    ) -> str:
+        evidence_lines = []
+        available_docs: list[str] = []
+        seen_docs: set[str] = set()
+        for ev in evidences:
+            evidence_lines.append(
+                {
+                    "source_id": ev["source_id"],
+                    "chunk_id": ev["chunk_id"],
+                    "doc_id": ev["doc_id"],
+                    "file_name": ev["file_name"],
+                    "file_path": ev["file_path"],
+                    "page_start": ev["page_start"],
+                    "page_end": ev["page_end"],
+                    "text": ev["text"],
+                }
+            )
+            doc_name = str(ev.get("file_name", ""))
+            if doc_name and doc_name not in seen_docs:
+                seen_docs.add(doc_name)
+                available_docs.append(doc_name)
+        retry_instruction = ""
+        if retry_mode:
+            retry_instruction = (
+                "\nModo de correcao: existem evidencias relevantes para a pergunta."
+                "\nNao marque not_found se houver ao menos 1 claim ancorada em citacao valida."
+                "\nUse claims curtas e citacoes literais dos trechos."
+            )
+        coverage_instruction = ""
+        if coverage_request and len(available_docs) > 1:
+            min_docs = min(4, len(available_docs))
+            coverage_instruction = (
+                "\n5) A pergunta pede cobertura ampla. Distribua as citacoes entre documentos diferentes."
+                f"\n6) Tente usar no minimo {min_docs} livros distintos quando houver evidencias."
+            )
+        focus_text = ", ".join(focus_terms) if focus_terms else "(nao informado)"
+        return (
+            "Pergunta do usuario:\n"
+            f"{question}\n\n"
+            "Termos-foco obrigatorios para relevancia:\n"
+            f"{focus_text}\n\n"
+            "Documentos disponiveis:\n"
+            f"{json.dumps(available_docs, ensure_ascii=False)}\n\n"
+            "EVIDENCIAS (somente estas podem ser usadas):\n"
+            f"{json.dumps(evidence_lines, ensure_ascii=False)}\n\n"
+            "Schema JSON obrigatorio:\n"
+            f"{json.dumps(JSON_SCHEMA_HINT, ensure_ascii=False)}\n\n"
+            "Regras adicionais de resposta:\n"
+            "1) Cada claim deve citar explicitamente o tema da pergunta ou sinonimo direto presente nas evidencias.\n"
+            "2) Evite claims genericas que nao sustentem o foco.\n"
+            "3) Mantenha no maximo 5 key_points, 3 suggested_qa e 6 claims.\n"
+            "4) Se nao houver evidencia suficiente, retorne not_found=true e arrays vazios."
+            f"{coverage_instruction}"
+            f"{retry_instruction}"
+        )
+
+    @staticmethod
+    def _parse_json(raw: str) -> dict[str, Any] | None:
+        raw = raw.strip()
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data
+            return None
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+            if not match:
+                return None
+            try:
+                data = json.loads(match.group(0))
+                return data if isinstance(data, dict) else None
+            except json.JSONDecodeError:
+                return None
