@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Virtualenv and local env
+.venv/
+venv/
+.env
+
+# Runtime data
+data/
+logs/
+.ingest_state.json
+
+# Documents and local content
+docs/*.pdf
+docs/*.PDF
+docs/*.txt
+docs/*.TXT
+docs/*.md
+docs/*.MD
+!docs/.gitkeep
+
+# Frontend build/runtime
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
