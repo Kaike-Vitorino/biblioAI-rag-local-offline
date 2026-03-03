@@ -1,4 +1,4 @@
-# BiblioIA RAG Local (Offline, One-Click)
+# BiblioAI RAG Local (Offline, One-Click)
 
 Sistema local de RAG (Retrieval-Augmented Generation) para consulta de documentos com citacoes rastreaveis.
 Foi pensado para rodar em casa/escritorio sem depender de servicos cloud na execucao diaria.
