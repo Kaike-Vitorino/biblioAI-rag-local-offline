@@ -92,6 +92,7 @@ export type DocItem = {
   file_name: string;
   sha256: string;
   page_count: number;
+  is_enabled: boolean;
 };
 
 export type DocsResponse = {

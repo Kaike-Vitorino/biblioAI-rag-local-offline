@@ -5,6 +5,7 @@ import type {
   ChatMessagesResponse,
   ChatResponse,
   ChatsResponse,
+  DocItem,
   DocsResponse,
   HighlightResponse,
   IngestStatusResponse,
@@ -83,6 +84,19 @@ export async function postChatMessage(chatId: string, question: string): Promise
 
 export async function getDocs(): Promise<DocsResponse> {
   return http<DocsResponse>("/docs");
+}
+
+export async function updateDoc(docId: string, isEnabled: boolean): Promise<DocItem> {
+  return http<DocItem>(`/docs/${encodeURIComponent(docId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ is_enabled: isEnabled })
+  });
+}
+
+export async function deleteDoc(docId: string): Promise<{ ok: boolean }> {
+  return http<{ ok: boolean }>(`/docs/${encodeURIComponent(docId)}`, {
+    method: "DELETE"
+  });
 }
 
 export async function startIngest(docsPath = "docs"): Promise<{ job_id: string; status: string }> {

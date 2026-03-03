@@ -126,7 +126,7 @@ class RetrievalService:
                 FROM chunks_fts
                 JOIN chunks c ON c.rowid = chunks_fts.rowid
                 JOIN docs d ON d.id = c.doc_id
-                WHERE chunks_fts MATCH ?
+                WHERE chunks_fts MATCH ? AND d.is_enabled = 1
                 ORDER BY bm25_score
                 LIMIT ?
                 """,
@@ -177,7 +177,7 @@ class RetrievalService:
                 d.file_path
             FROM chunks c
             JOIN docs d ON d.id = c.doc_id
-            WHERE c.chunk_id IN ({placeholders})
+            WHERE c.chunk_id IN ({placeholders}) AND d.is_enabled = 1
             """,
             chunk_ids,
         )

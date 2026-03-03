@@ -22,6 +22,7 @@ from app.models.schemas import (
     ChatMessagesResponse,
     ChatsResponse,
     DocItem,
+    DocUpdateRequest,
     DocsResponse,
     HighlightResponse,
     IngestRequest,
@@ -294,7 +295,7 @@ def post_chat_message(chat_id: str, request: ChatRequest) -> dict:
 
 @app.get("/docs", response_model=DocsResponse)
 def list_docs() -> DocsResponse:
-    rows = db.fetchall("SELECT id, file_path, file_name, sha256, page_count FROM docs ORDER BY file_name")
+    rows = db.fetchall("SELECT id, file_path, file_name, sha256, page_count, is_enabled FROM docs ORDER BY file_name")
     docs = [
         DocItem(
             id=row["id"],
@@ -302,11 +303,48 @@ def list_docs() -> DocsResponse:
             file_name=row["file_name"],
             sha256=row["sha256"],
             page_count=row["page_count"],
+            is_enabled=bool(row["is_enabled"]),
         )
         for row in rows
     ]
     return DocsResponse(docs=docs)
 
+
+
+
+@app.patch("/docs/{doc_id}", response_model=DocItem)
+def update_doc(doc_id: str, request: DocUpdateRequest) -> DocItem:
+    row = db.fetchone("SELECT id FROM docs WHERE id = ?", [doc_id])
+    if row is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    db.execute("UPDATE docs SET is_enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [1 if request.is_enabled else 0, doc_id])
+    updated = db.fetchone("SELECT id, file_path, file_name, sha256, page_count, is_enabled FROM docs WHERE id = ?", [doc_id])
+    if updated is None:
+        raise HTTPException(status_code=500, detail="Failed to update document.")
+    return DocItem(
+        id=updated["id"],
+        file_path=updated["file_path"],
+        file_name=updated["file_name"],
+        sha256=updated["sha256"],
+        page_count=updated["page_count"],
+        is_enabled=bool(updated["is_enabled"]),
+    )
+
+
+@app.delete("/docs/{doc_id}")
+def delete_doc(doc_id: str) -> dict[str, bool]:
+    row = db.fetchone("SELECT id, file_path FROM docs WHERE id = ?", [doc_id])
+    if row is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    file_path = Path(str(row["file_path"]))
+    db.execute("DELETE FROM docs WHERE id = ?", [doc_id])
+    try:
+        if file_path.exists():
+            file_path.unlink()
+    except Exception:
+        logger.warning("Failed to remove file from disk: %s", file_path)
+    vector_store.rebuild_from_db(db)
+    return {"ok": True}
 
 @app.get("/docs/{doc_id}/pdf")
 def get_doc_pdf(doc_id: str) -> FileResponse:

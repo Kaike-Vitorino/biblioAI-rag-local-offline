@@ -12,6 +12,8 @@ import {
   postChatMessage,
   renameChat,
   startIngest,
+  updateDoc,
+  deleteDoc as deleteDocument,
   uploadDocument
 } from "./api";
 import ChatInput from "./components/ChatInput";
@@ -311,6 +313,31 @@ export default function App() {
     }
   }
 
+
+
+  async function handleToggleDoc(doc: DocItem, enabled: boolean) {
+    try {
+      const updated = await updateDoc(doc.id, enabled);
+      setDocs((prev) => prev.map((item) => (item.id === doc.id ? updated : item)));
+    } catch (error) {
+      setUploadMessage(error instanceof Error ? error.message : "Falha ao atualizar documento.");
+      await refreshDocs();
+    }
+  }
+
+  async function handleDeleteDoc(doc: DocItem) {
+    const confirmed = window.confirm(`Apagar o documento "${doc.file_name}"?`);
+    if (!confirmed) return;
+    try {
+      await deleteDocument(doc.id);
+      setDocs((prev) => prev.filter((item) => item.id !== doc.id));
+      setUploadMessage(`Documento removido: ${doc.file_name}`);
+    } catch (error) {
+      setUploadMessage(error instanceof Error ? error.message : "Falha ao apagar documento.");
+      await refreshDocs();
+    }
+  }
+
   function onFileInputChange(event: ChangeEvent<HTMLInputElement>) {
     const selected = Array.from(event.target.files ?? []);
     event.currentTarget.value = "";
@@ -461,7 +488,7 @@ export default function App() {
 
       <aside className={`sidebar-column ${mobileSidebarOpen ? "open" : ""}`}>
         <div className="sidebar-header">
-          <h1>Spiritism RAG</h1>
+          <h1>Local RAG</h1>
           <button
             type="button"
             className="sidebar-close mobile-only"
@@ -515,6 +542,41 @@ export default function App() {
           {uploading ? <progress className="upload-progress" max={100} value={uploadProgress} /> : null}
           {uploadMessage ? <p className="sidebar-status">{uploadMessage}</p> : null}
           <p className="sidebar-status">Biblioteca: {docs.length} docs</p>
+        </div>
+
+
+
+        <div className="docs-hub">
+          <div className="docs-hub-header">
+            <h3>HUB de Documentos</h3>
+            <span>{docs.length} total</span>
+          </div>
+          <p className="docs-hub-help">Marque os documentos que a IA deve considerar na busca.</p>
+          <div className="docs-hub-list">
+            {docs.length ? docs.map((doc) => (
+              <article key={doc.id} className="docs-hub-item">
+                <label className="docs-hub-toggle">
+                  <input
+                    type="checkbox"
+                    checked={doc.is_enabled}
+                    onChange={(event) => {
+                      void handleToggleDoc(doc, event.target.checked);
+                    }}
+                  />
+                  <span title={doc.file_name}>{doc.file_name}</span>
+                </label>
+                <button
+                  type="button"
+                  className="docs-hub-delete"
+                  onClick={() => {
+                    void handleDeleteDoc(doc);
+                  }}
+                >
+                  Apagar
+                </button>
+              </article>
+            )) : <p className="sidebar-status">Nenhum documento carregado.</p>}
+          </div>
         </div>
 
         <div className="chat-list">

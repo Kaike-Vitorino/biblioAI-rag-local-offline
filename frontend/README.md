@@ -6,7 +6,7 @@ Este frontend e buildado em producao pelo `launcher.py` e servido pelo backend e
 
 - Nao rode comandos manualmente.
 - Use o launcher da raiz:
-  - [launcher.py](/G:/ai/Spiritism_AK/launcher.py)
+  - [launcher.py](/launcher.py)
 
 ## Desenvolvimento local (opcional)
 

@@ -1116,3 +1116,73 @@ blockquote {
     bottom: 30px;
   }
 }
+
+.docs-hub {
+  border: 1px solid var(--border-glass);
+  border-radius: 12px;
+  padding: 10px;
+  background: var(--bg-card);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 120px;
+}
+
+.docs-hub-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.docs-hub-header h3 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.docs-hub-header span,
+.docs-hub-help {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.docs-hub-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.docs-hub-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--border-glass);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.docs-hub-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 0.8rem;
+}
+
+.docs-hub-toggle span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.docs-hub-delete {
+  border: 1px solid var(--border-glass);
+  background: transparent;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  padding: 4px 8px;
+  cursor: pointer;
+}

@@ -42,7 +42,7 @@ SUPPORTED_DOC_EXTENSIONS = {".pdf", ".txt", ".md"}
 NODE_DOWNLOAD_PAGE = "https://nodejs.org/en/download"
 OLLAMA_DOWNLOAD_PAGE = "https://ollama.com/download/windows"
 OLLAMA_INSTALLER_URL = "https://ollama.com/download/OllamaSetup.exe"
-DEFAULT_SMOKE_QUERY = "Quero os topicos que explicam e falam sobre o perispirito"
+DEFAULT_SMOKE_QUERY = "Quais sao os principais topicos abordados nos documentos?"
 BACKEND_RUNTIME_MARKER = ROOT_DIR / "data" / ".backend_runtime.json"
 
 
@@ -290,7 +290,7 @@ def install_node_assisted() -> None:
         "O Node.js nao foi encontrado.\n\nSera aberto o instalador. Clique em Next > Next > Install.",
         kind="warning",
     )
-    with tempfile.TemporaryDirectory(prefix="spiritism_node_") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="local_rag_node_") as temp_dir:
         temp_path = Path(temp_dir)
         try:
             url, filename = get_latest_node_msi_url()
@@ -310,7 +310,7 @@ def install_ollama_assisted() -> None:
         "O Ollama nao foi encontrado.\n\nSera aberto o instalador. Clique em Next > Install.",
         kind="warning",
     )
-    with tempfile.TemporaryDirectory(prefix="spiritism_ollama_") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="local_rag_ollama_") as temp_dir:
         temp_path = Path(temp_dir)
         try:
             installer = temp_path / "OllamaSetup.exe"
@@ -934,7 +934,7 @@ def open_ui() -> None:
 
 def run() -> None:
     setup_logging()
-    status("=== Spiritism RAG Local - Launcher One-Click ===")
+    status("=== Local RAG - Launcher One-Click ===")
 
     if sys.version_info < (3, 11):
         raise RuntimeError("Python 3.11+ e necessario para executar este projeto.")

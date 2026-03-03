@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS docs (
     file_name TEXT NOT NULL,
     sha256 TEXT NOT NULL,
     page_count INTEGER NOT NULL DEFAULT 0,
+    is_enabled INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -120,6 +121,11 @@ class Database:
             self.conn.commit()
 
     def _run_migrations(self) -> None:
+        # docs.is_enabled
+        if not self._column_exists("docs", "is_enabled"):
+            self.conn.execute("ALTER TABLE docs ADD COLUMN is_enabled INTEGER NOT NULL DEFAULT 1")
+            self.conn.execute("UPDATE docs SET is_enabled = 1 WHERE is_enabled IS NULL")
+
         # conversations.title
         if not self._column_exists("conversations", "title"):
             self.conn.execute("ALTER TABLE conversations ADD COLUMN title TEXT")
