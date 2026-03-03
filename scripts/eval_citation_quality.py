@@ -30,16 +30,16 @@ class QuerySpec:
 
 
 QUERIES: list[QuerySpec] = [
-    QuerySpec("perispirito", "Quero citacoes objetivas sobre o perispirito.", ["perispir"], 0.85, 1, 1, 3),
-    QuerySpec("sonhos", "Me mostre referencias sobre sonhos e emancipacao da alma.", ["sonh"], 0.75, 1, 1, 3),
-    QuerySpec("reencarnacao", "Quais passagens falam de reencarnacao?", ["reencarn"], 0.8, 1, 1, 3),
-    QuerySpec("mediunidade", "Quero referencias sobre mediunidade.", ["mediun"], 0.8, 1, 1, 3),
-    QuerySpec("fluidos", "Referencias sobre fluidos espirituais e perispirito.", ["fluido", "perispir"], 0.75, 1, 1, 3),
-    QuerySpec("pluralidade", "Quais referencias tratam da pluralidade dos mundos?", ["pluralid", "mund"], 0.75, 1, 1, 3),
-    QuerySpec("obsessao", "Quero citacoes sobre obsessao espiritual.", ["obsess"], 0.75, 1, 1, 3),
-    QuerySpec("imaterialidade_deus", "Me aponte todas as referencias da imaterialidade de Deus.", ["imaterial"], 0.7, 2, 4, 8),
-    QuerySpec("imortalidade", "Quais trechos tratam de imortalidade da alma?", ["imortal", "alma"], 0.7, 1, 1, 3),
-    QuerySpec("comunicacao", "Citacoes sobre comunicacao dos Espiritos com os mediuns.", ["espirit", "mediun"], 0.7, 1, 1, 3),
+    QuerySpec("introducao", "Quero citacoes objetivas dos temas introdutorios.", ["introdu", "tema"], 0.75, 1, 1, 3),
+    QuerySpec("resumo", "Me mostre referencias com resumo dos pontos principais.", ["resum", "princip"], 0.7, 1, 1, 3),
+    QuerySpec("conceitos", "Quais trechos explicam os conceitos centrais?", ["conceit", "centr"], 0.75, 1, 1, 3),
+    QuerySpec("metodologia", "Quero referencias sobre metodologia e processo.", ["metodolog", "process"], 0.7, 1, 1, 3),
+    QuerySpec("comparacao", "Referencias que comparem abordagens ou cenarios.", ["compar", "abord"], 0.7, 1, 1, 3),
+    QuerySpec("conclusao", "Quais referencias tratam da conclusao?", ["conclus"], 0.7, 1, 1, 3),
+    QuerySpec("recomendacoes", "Quero citacoes sobre recomendacoes praticas.", ["recomend", "pratic"], 0.7, 1, 1, 3),
+    QuerySpec("definicoes", "Me aponte referencias com definicoes importantes.", ["definic", "import"], 0.7, 1, 1, 3),
+    QuerySpec("aplicacoes", "Quais trechos tratam de aplicacoes reais?", ["aplic", "real"], 0.7, 1, 1, 3),
+    QuerySpec("evidencias", "Citacoes sobre evidencias e justificativas.", ["evidenc", "justific"], 0.7, 1, 1, 3),
 ]
 
 

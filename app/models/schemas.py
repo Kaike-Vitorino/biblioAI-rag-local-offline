@@ -67,6 +67,11 @@ class DocItem(BaseModel):
     file_name: str
     sha256: str
     page_count: int
+    is_enabled: bool
+
+
+class DocUpdateRequest(BaseModel):
+    is_enabled: bool
 
 
 class DocsResponse(BaseModel):

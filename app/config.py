@@ -69,7 +69,7 @@ class Settings:
         docs_dir.mkdir(parents=True, exist_ok=True)
 
         settings = cls(
-            app_name=os.getenv("APP_NAME", "Spiritism Local RAG"),
+            app_name=os.getenv("APP_NAME", "Local RAG"),
             host=os.getenv("BACKEND_HOST", os.getenv("HOST", "0.0.0.0")),
             port=_env_int("BACKEND_PORT", _env_int("PORT", 8000)),
             docs_dir=docs_dir,
