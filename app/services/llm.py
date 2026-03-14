@@ -64,6 +64,7 @@ class LLMService:
         focus_terms: list[str] | None = None,
         coverage_request: bool = False,
         retry_mode: bool = False,
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         prompt = self._build_user_prompt(
             question,
@@ -71,6 +72,7 @@ class LLMService:
             focus_terms=focus_terms or [],
             coverage_request=coverage_request,
             retry_mode=retry_mode,
+            conversation_history=conversation_history or [],
         )
         payload = {
             "model": self.settings.model,
@@ -105,6 +107,7 @@ class LLMService:
         focus_terms: list[str] | None = None,
         coverage_request: bool = False,
         retry_mode: bool = False,
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> Generator[str, None, None]:
         prompt = self._build_user_prompt(
             question,
@@ -112,6 +115,7 @@ class LLMService:
             focus_terms=focus_terms or [],
             coverage_request=coverage_request,
             retry_mode=retry_mode,
+            conversation_history=conversation_history or [],
         )
         payload = {
             "model": self.settings.model,
@@ -249,6 +253,7 @@ class LLMService:
         focus_terms: list[str],
         coverage_request: bool,
         retry_mode: bool = False,
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> str:
         evidence_lines = []
         available_docs: list[str] = []
@@ -285,9 +290,18 @@ class LLMService:
                 f"\n6) Tente usar no minimo {min_docs} livros distintos quando houver evidencias."
             )
         focus_text = ", ".join(focus_terms) if focus_terms else "(nao informado)"
+        history_lines: list[dict[str, str]] = []
+        for turn in conversation_history or []:
+            role = str(turn.get("role", "")).strip()
+            content = str(turn.get("content", "")).strip()
+            if not role or not content:
+                continue
+            history_lines.append({"role": role, "content": content[:700]})
         return (
             "Pergunta do usuario:\n"
             f"{question}\n\n"
+            "Contexto da conversa anterior (se existir):\n"
+            f"{json.dumps(history_lines, ensure_ascii=False)}\n\n"
             "Termos-foco obrigatorios para relevancia:\n"
             f"{focus_text}\n\n"
             "Documentos disponiveis:\n"

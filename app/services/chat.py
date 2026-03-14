@@ -35,7 +35,13 @@ class ChatService:
         self._ensure_conversation(conv_id, initial_question=question)
         self._add_message(conv_id, "user", {"question": question})
 
-        retrieval = self.retrieval_service.retrieve(question)
+        conversation_history = self._load_conversation_history(
+            conv_id, exclude_latest_user_question=question, limit=10
+        )
+        retrieval_question = self._build_contextual_query(
+            question, conversation_history
+        )
+        retrieval = self.retrieval_service.retrieve(retrieval_question)
         all_references = retrieval.get("all_references", [])
         focus_terms = retrieval.get("focus_terms", [])
         coverage_request = bool(retrieval.get("coverage_request"))
@@ -81,6 +87,7 @@ class ChatService:
                 evidences,
                 focus_terms=focus_terms,
                 coverage_request=coverage_request,
+                conversation_history=conversation_history,
             )
             validated = self.validator.validate(llm_response, evidences)
             if validated.get("not_found") and self._should_retry_not_found(retrieval):
@@ -90,6 +97,7 @@ class ChatService:
                     focus_terms=focus_terms,
                     coverage_request=coverage_request,
                     retry_mode=True,
+                    conversation_history=conversation_history,
                 )
                 validated_retry = self.validator.validate(llm_retry, evidences)
                 if not validated_retry.get("not_found"):
@@ -162,7 +170,13 @@ class ChatService:
         self._ensure_conversation(conv_id, initial_question=question)
         self._add_message(conv_id, "user", {"question": question})
 
-        retrieval = self.retrieval_service.retrieve(question)
+        conversation_history = self._load_conversation_history(
+            conv_id, exclude_latest_user_question=question, limit=10
+        )
+        retrieval_question = self._build_contextual_query(
+            question, conversation_history
+        )
+        retrieval = self.retrieval_service.retrieve(retrieval_question)
         all_references = retrieval.get("all_references", [])
         focus_terms = retrieval.get("focus_terms", [])
         coverage_request = bool(retrieval.get("coverage_request"))
@@ -216,6 +230,7 @@ class ChatService:
                 evidences,
                 focus_terms=focus_terms,
                 coverage_request=coverage_request,
+                conversation_history=conversation_history,
             ):
                 full_text += chunk
                 yield json.dumps({"type": "content", "content": chunk}) + "\n"
@@ -525,6 +540,115 @@ class ChatService:
         if len(compact) <= max_len:
             return compact
         return compact[:max_len].rstrip() + "..."
+
+    def _load_conversation_history(
+        self,
+        conversation_id: str,
+        exclude_latest_user_question: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, str]]:
+        rows = self.db.fetchall(
+            """
+            SELECT role, content_json
+            FROM messages
+            WHERE conversation_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            [conversation_id, max(1, limit + 2)],
+        )
+        history: list[dict[str, str]] = []
+        skip_once = bool(exclude_latest_user_question)
+        question_norm = normalize_text(exclude_latest_user_question or "")
+
+        for row in rows:
+            role = str(row.get("role", "")).strip().lower()
+            if role not in {"user", "assistant"}:
+                continue
+            try:
+                payload = json.loads(str(row.get("content_json", "{}")))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+
+            content_text = ""
+            if role == "user":
+                content_text = str(payload.get("question", "")).strip()
+                if (
+                    skip_once
+                    and question_norm
+                    and normalize_text(content_text) == question_norm
+                ):
+                    skip_once = False
+                    continue
+            else:
+                content_text = str(
+                    payload.get("synopsis") or payload.get("message") or ""
+                ).strip()
+
+            if not content_text:
+                continue
+            history.append({"role": role, "content": content_text})
+
+        history.reverse()
+        return history[-limit:]
+
+    @staticmethod
+    def _build_contextual_query(
+        current_question: str,
+        conversation_history: list[dict[str, str]],
+    ) -> str:
+        if not conversation_history:
+            return current_question
+        q_norm = normalize_text(current_question)
+        followup_markers = {
+            "isso",
+            "esse",
+            "essa",
+            "essas",
+            "esses",
+            "anterior",
+            "antes",
+            "acima",
+            "disso",
+            "sobre isso",
+            "tem certeza",
+            "explique melhor",
+            "aprofunde",
+            "continue",
+        }
+        short_question = len(q_norm.split()) <= 8
+        implicit_followup = short_question or any(
+            marker in q_norm for marker in followup_markers
+        )
+        if not implicit_followup:
+            return current_question
+
+        previous_user = ""
+        previous_assistant = ""
+        for turn in reversed(conversation_history):
+            role = str(turn.get("role", ""))
+            content = str(turn.get("content", "")).strip()
+            if not content:
+                continue
+            if role == "user" and not previous_user:
+                previous_user = content
+            if role == "assistant" and not previous_assistant:
+                previous_assistant = content
+            if previous_user and previous_assistant:
+                break
+
+        context_parts = []
+        if previous_user:
+            context_parts.append(f"Pergunta anterior: {previous_user}")
+        if previous_assistant:
+            context_parts.append(f"Resumo anterior: {previous_assistant}")
+        if not context_parts:
+            return current_question
+        return f"{current_question}\n\nContexto de conversa:\n" + "\n".join(
+            context_parts
+        )
 
     def _log_retrieval(
         self, conversation_id: str, question: str, retrieval: dict[str, Any]
