@@ -1,2 +1,2 @@
-"""Spiritism local RAG backend package."""
+"""Local RAG backend package."""
 

@@ -11,7 +11,12 @@ from app.db.database import Database
 from app.services.cache import TTLCache
 from app.services.embedding import EmbeddingService
 from app.services.query_planner import QueryPlanner
-from app.services.text_utils import STOPWORDS_PT, build_fts_query, expand_query_terms, normalize_text
+from app.services.text_utils import (
+    STOPWORDS_PT,
+    build_fts_query,
+    expand_query_terms,
+    normalize_text,
+)
 from app.services.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -52,7 +57,9 @@ class RetrievalService:
         planned_terms: list[str] = []
         if self.query_planner is not None:
             planned_terms = self.query_planner.plan(question)
-        terms = planned_terms + [term for term in heuristic_terms if term not in planned_terms]
+        terms = planned_terms + [
+            term for term in heuristic_terms if term not in planned_terms
+        ]
         terms = self._dedupe_terms(terms)
         if not terms:
             terms = heuristic_terms
@@ -62,11 +69,17 @@ class RetrievalService:
         core_terms = self._select_core_terms(terms)
         if core_terms:
             core_query = build_fts_query(core_terms, question)
-            core_candidates = self._lexical_search(core_query, max(8, self.settings.lexical_topn // 2), lexical_boost=0.25)
+            core_candidates = self._lexical_search(
+                core_query, max(8, self.settings.lexical_topn // 2), lexical_boost=0.25
+            )
             lexical_candidates.extend(core_candidates)
         vector_candidates = self._vector_search(question, self.settings.vector_topn)
-        merged = self._merge_candidates(lexical_candidates, vector_candidates, focus_terms=focus_terms)
-        final_chunks = self._select_final_chunks(merged, topk, coverage_request=coverage_request)
+        merged = self._merge_candidates(
+            lexical_candidates, vector_candidates, focus_terms=focus_terms
+        )
+        final_chunks = self._select_final_chunks(
+            merged, topk, coverage_request=coverage_request
+        )
         all_references = self._build_all_references(
             merged=merged,
             selected_chunks=final_chunks,
@@ -107,7 +120,9 @@ class RetrievalService:
         self._result_cache.set(cache_key, result)
         return result
 
-    def _lexical_search(self, fts_query: str, top_n: int, lexical_boost: float = 0.0) -> list[dict[str, Any]]:
+    def _lexical_search(
+        self, fts_query: str, top_n: int, lexical_boost: float = 0.0
+    ) -> list[dict[str, Any]]:
         if not fts_query.strip() or fts_query.strip() == '""':
             return []
         try:
@@ -126,7 +141,7 @@ class RetrievalService:
                 FROM chunks_fts
                 JOIN chunks c ON c.rowid = chunks_fts.rowid
                 JOIN docs d ON d.id = c.doc_id
-                WHERE chunks_fts MATCH ?
+                WHERE chunks_fts MATCH ? AND d.is_enabled = 1
                 ORDER BY bm25_score
                 LIMIT ?
                 """,
@@ -138,7 +153,9 @@ class RetrievalService:
         results: list[dict[str, Any]] = []
         for rank, row in enumerate(rows):
             base_rank_score = 1.0 / (rank + 1)
-            bm25_score = float(row["bm25_score"]) if row["bm25_score"] is not None else 0.0
+            bm25_score = (
+                float(row["bm25_score"]) if row["bm25_score"] is not None else 0.0
+            )
             bm25_component = 1.0 / (1.0 + max(0.0, -bm25_score))
             lexical_score = max(base_rank_score, bm25_component) + lexical_boost
             results.append(
@@ -177,7 +194,7 @@ class RetrievalService:
                 d.file_path
             FROM chunks c
             JOIN docs d ON d.id = c.doc_id
-            WHERE c.chunk_id IN ({placeholders})
+            WHERE c.chunk_id IN ({placeholders}) AND d.is_enabled = 1
             """,
             chunk_ids,
         )
@@ -220,12 +237,16 @@ class RetrievalService:
             if existing is None:
                 merged[item["chunk_id"]] = dict(item)
             else:
-                existing["vector_score"] = max(existing["vector_score"], item["vector_score"])
+                existing["vector_score"] = max(
+                    existing["vector_score"], item["vector_score"]
+                )
 
         final = []
         focus_terms = focus_terms or []
         for candidate in merged.values():
-            score = 0.55 * float(candidate.get("lexical_score", 0.0)) + 0.45 * float(candidate.get("vector_score", 0.0))
+            score = 0.55 * float(candidate.get("lexical_score", 0.0)) + 0.45 * float(
+                candidate.get("vector_score", 0.0)
+            )
             if self._is_index_like(candidate.get("text", "")):
                 score *= 0.3
             focus_signal = self._focus_signal(candidate.get("text", ""), focus_terms)
@@ -281,7 +302,9 @@ class RetrievalService:
             return cached
         query = f'"{term.replace(chr(34), " ")}"'
         try:
-            row = self.db.fetchone("SELECT count(*) AS n FROM chunks_fts WHERE chunks_fts MATCH ?", [query])
+            row = self.db.fetchone(
+                "SELECT count(*) AS n FROM chunks_fts WHERE chunks_fts MATCH ?", [query]
+            )
             value = int(row["n"]) if row else 0
         except sqlite3.OperationalError:
             value = 0
@@ -318,7 +341,9 @@ class RetrievalService:
     def _matches_focus(self, text: str, focus_terms: list[str]) -> bool:
         return self._focus_signal(text, focus_terms)["matched"]
 
-    def _determine_focus_terms(self, planned_terms: list[str], terms: list[str], question: str) -> list[str]:
+    def _determine_focus_terms(
+        self, planned_terms: list[str], terms: list[str], question: str
+    ) -> list[str]:
         question_terms = [
             tok
             for tok in normalize_text(question).split()
@@ -330,21 +355,31 @@ class RetrievalService:
                 for term in planned_terms
                 if " " not in term and len(term) >= 4 and term not in STOPWORDS_PT
             ]
-            planned_selected = self._rank_focus_terms(planned_clean + question_terms, question)
-            planned_selected = self._prioritize_question_terms(planned_selected, question_terms)
+            planned_selected = self._rank_focus_terms(
+                planned_clean + question_terms, question
+            )
+            planned_selected = self._prioritize_question_terms(
+                planned_selected, question_terms
+            )
             if planned_selected:
                 return planned_selected[:2]
             if planned_clean:
                 return planned_clean[:2]
         candidate_pool = self._select_core_terms(terms) + [
-            term for term in terms if " " not in term and len(term) >= 4 and term not in STOPWORDS_PT
+            term
+            for term in terms
+            if " " not in term and len(term) >= 4 and term not in STOPWORDS_PT
         ]
         selected = self._rank_focus_terms(candidate_pool + question_terms, question)
         selected = self._prioritize_question_terms(selected, question_terms)
         if selected:
             return selected[:2]
         # Fallback: prioritize informative unigrams from expanded terms.
-        tokens = [term for term in terms if " " not in term and len(term) >= 5 and term not in STOPWORDS_PT]
+        tokens = [
+            term
+            for term in terms
+            if " " not in term and len(term) >= 5 and term not in STOPWORDS_PT
+        ]
         tokens = self._rank_focus_terms(tokens, question)
         if tokens:
             return tokens[:2]
@@ -366,31 +401,59 @@ class RetrievalService:
             unique.append(normalized)
         return unique
 
-    def _focus_signal(self, text: str, focus_terms: list[str]) -> dict[str, float | bool]:
+    def _focus_signal(
+        self, text: str, focus_terms: list[str]
+    ) -> dict[str, float | bool]:
         normalized = normalize_text(text)
         if not normalized:
-            return {"matched": False, "primary_matched": False, "density": 0.0, "earlyness": 0.0}
+            return {
+                "matched": False,
+                "primary_matched": False,
+                "density": 0.0,
+                "earlyness": 0.0,
+            }
         stems = self._term_stems(focus_terms)
         if not stems:
-            return {"matched": False, "primary_matched": False, "density": 0.0, "earlyness": 0.0}
+            return {
+                "matched": False,
+                "primary_matched": False,
+                "density": 0.0,
+                "earlyness": 0.0,
+            }
+
+        # Verificar se TODOS os stems principais estão presentes para multi-termo
+        stems_present = [stem for stem in stems if stem in normalized]
+
+        # Se houver mais de um stem focal, exigimos que todos estejam presentes
+        if len(stems) > 1 and len(stems_present) < len(stems):
+            return {
+                "matched": False,
+                "primary_matched": False,
+                "density": 0.0,
+                "earlyness": 0.0,
+            }
 
         total_hits = 0
         primary_hits = 0
         first_position: int | None = None
         for idx, stem in enumerate(stems):
-            for match in re.finditer(re.escape(stem), normalized):
-                total_hits += 1
+            matches = list(re.finditer(re.escape(stem), normalized))
+            if matches:
+                total_hits += len(matches)
                 if idx == 0:
-                    primary_hits += 1
-                if first_position is None or match.start() < first_position:
-                    first_position = match.start()
+                    primary_hits += len(matches)
+                if first_position is None or matches[0].start() < first_position:
+                    first_position = matches[0].start()
 
         if total_hits <= 0:
-            return {"matched": False, "primary_matched": False, "density": 0.0, "earlyness": 0.0}
+            return {
+                "matched": False,
+                "primary_matched": False,
+                "density": 0.0,
+                "earlyness": 0.0,
+            }
 
         primary_matched = primary_hits > 0
-        if len(stems) > 1 and not primary_matched:
-            return {"matched": False, "primary_matched": False, "density": 0.0, "earlyness": 0.0}
 
         density = min(1.0, total_hits / max(2, len(stems) * 2))
         if first_position is None:
@@ -504,7 +567,9 @@ class RetrievalService:
             return []
 
         selected_ids = {str(item.get("chunk_id", "")) for item in selected_chunks}
-        ordered = [item for item in merged if str(item.get("chunk_id", "")) in selected_ids] + merged
+        ordered = [
+            item for item in merged if str(item.get("chunk_id", "")) in selected_ids
+        ] + merged
         all_refs: list[dict[str, Any]] = []
         seen: set[str] = set()
 
@@ -513,7 +578,9 @@ class RetrievalService:
             chunk_id = str(item.get("chunk_id", "")).strip()
             if not chunk_id or chunk_id in seen:
                 continue
-            if chunk_id not in selected_ids and not self._is_related_candidate(item, focus_terms):
+            if chunk_id not in selected_ids and not self._is_related_candidate(
+                item, focus_terms
+            ):
                 continue
             seen.add(chunk_id)
             all_refs.append(
@@ -525,6 +592,7 @@ class RetrievalService:
                     "file_path": item["file_path"],
                     "page_start": item["page_start"],
                     "page_end": item["page_end"],
+                    "text": str(item.get("text", ""))[:1200],
                     "score": float(item.get("score", 0.0)),
                     "focus_match": bool(item.get("focus_match")),
                 }
@@ -533,7 +601,9 @@ class RetrievalService:
                 break
         return all_refs
 
-    def _is_related_candidate(self, candidate: dict[str, Any], focus_terms: list[str]) -> bool:
+    def _is_related_candidate(
+        self, candidate: dict[str, Any], focus_terms: list[str]
+    ) -> bool:
         text = str(candidate.get("text", ""))
         if self._is_low_information(text):
             return False
@@ -555,7 +625,11 @@ class RetrievalService:
         if not candidates:
             return []
         normalized_question = normalize_text(question)
-        question_tokens = [tok for tok in normalized_question.split() if tok and tok not in STOPWORDS_PT]
+        question_tokens = [
+            tok
+            for tok in normalized_question.split()
+            if tok and tok not in STOPWORDS_PT
+        ]
         position_map: dict[str, int] = {}
         for idx, tok in enumerate(question_tokens):
             if tok not in position_map:
@@ -580,7 +654,9 @@ class RetrievalService:
         return unique
 
     @staticmethod
-    def _prioritize_question_terms(ranked_terms: list[str], question_terms: list[str]) -> list[str]:
+    def _prioritize_question_terms(
+        ranked_terms: list[str], question_terms: list[str]
+    ) -> list[str]:
         if not ranked_terms:
             return []
         if not question_terms:

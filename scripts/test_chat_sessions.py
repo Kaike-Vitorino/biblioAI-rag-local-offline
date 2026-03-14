@@ -28,7 +28,7 @@ def run() -> None:
 
     answer = requests.post(
         f"{BASE_URL}/chats/{chat_id}/messages",
-        json={"question": "Quero uma citacao sobre perispirito."},
+        json={"question": "Quero uma citacao objetiva sobre um tema central do documento."},
         timeout=300,
     )
     answer.raise_for_status()

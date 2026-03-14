@@ -11,7 +11,7 @@ import urllib.request
 
 
 BACKEND = os.getenv("SMOKE_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
-QUERY = os.getenv("SMOKE_TEST_QUERY", "Quero os topicos que explicam e falam sobre o perispirito")
+QUERY = os.getenv("SMOKE_TEST_QUERY", "Quais sao os principais topicos abordados nos documentos?")
 TIMEOUT_SECONDS = int(os.getenv("SMOKE_TIMEOUT_SECONDS", "900"))
 CHAT_TIMEOUT_SECONDS = int(os.getenv("SMOKE_CHAT_TIMEOUT_SECONDS", "240"))
 POLL_INTERVAL = 2

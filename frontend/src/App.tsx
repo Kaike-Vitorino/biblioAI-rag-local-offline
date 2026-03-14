@@ -10,8 +10,11 @@ import {
   getHighlight,
   getIngestJob,
   postChatMessage,
+  postChatMessageStream,
   renameChat,
   startIngest,
+  updateDoc,
+  deleteDoc as deleteDocument,
   uploadDocument
 } from "./api";
 import ChatInput from "./components/ChatInput";
@@ -103,9 +106,12 @@ export default function App() {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [loading, setLoading] = useState(false);
+  const [streamingContent, setStreamingContent] = useState<string>("");
   const [menuChatId, setMenuChatId] = useState<string | null>(null);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [mobileViewerOpen, setMobileViewerOpen] = useState(false);
+  const [chatMode, setChatMode] = useState<'search' | 'chat'>('search'); // 'search' = pesquisa única, 'chat' = memória
+  const [readerMode, setReaderMode] = useState(false);
 
   const [docs, setDocs] = useState<DocItem[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -311,6 +317,31 @@ export default function App() {
     }
   }
 
+
+
+  async function handleToggleDoc(doc: DocItem, enabled: boolean) {
+    try {
+      const updated = await updateDoc(doc.id, enabled);
+      setDocs((prev) => prev.map((item) => (item.id === doc.id ? updated : item)));
+    } catch (error) {
+      setUploadMessage(error instanceof Error ? error.message : "Falha ao atualizar documento.");
+      await refreshDocs();
+    }
+  }
+
+  async function handleDeleteDoc(doc: DocItem) {
+    const confirmed = window.confirm(`Apagar o documento "${doc.file_name}"?`);
+    if (!confirmed) return;
+    try {
+      await deleteDocument(doc.id);
+      setDocs((prev) => prev.filter((item) => item.id !== doc.id));
+      setUploadMessage(`Documento removido: ${doc.file_name}`);
+    } catch (error) {
+      setUploadMessage(error instanceof Error ? error.message : "Falha ao apagar documento.");
+      await refreshDocs();
+    }
+  }
+
   function onFileInputChange(event: ChangeEvent<HTMLInputElement>) {
     const selected = Array.from(event.target.files ?? []);
     event.currentTarget.value = "";
@@ -319,7 +350,15 @@ export default function App() {
 
   async function handleSend(question: string) {
     let chatId = activeChatId;
-    if (!chatId) {
+    
+    // Lógica de modo "Pesquisa Única": Se estiver no modo search e já tiver turnos, cria um novo chat
+    if (chatMode === 'search' && turns.length > 0) {
+        const created = await createChat({ title: question.substring(0, 30) || "Nova pesquisa" });
+        setChats((prev) => [created, ...prev.filter((item) => item.id !== created.id)]);
+        setActiveChatId(created.id);
+        setTurns([]); // Limpa os turns visuais imediatamente
+        chatId = created.id;
+    } else if (!chatId) {
       const created = await createChat({ title: "Novo chat" });
       setChats((prev) => [created, ...prev.filter((item) => item.id !== created.id)]);
       setActiveChatId(created.id);
@@ -329,14 +368,35 @@ export default function App() {
     const userTurn: UserTurn = { id: makeId("u"), role: "user", text: question };
     setTurns((prev) => [...prev, userTurn]);
     setLoading(true);
+    setStreamingContent(""); // Limpar conteúdo anterior
+
     try {
-      const response = await postChatMessage(chatId, question);
-      const assistantTurn: AssistantTurn = {
-        id: makeId("a"),
-        role: "assistant",
-        response
-      };
-      setTurns((prev) => [...prev, assistantTurn]);
+      // Usar streaming para demonstração
+      const stream = postChatMessageStream(chatId, question);
+      let finalResponse: ChatResponse | null = null;
+
+      for await (const event of stream) {
+        if (event.type === "content") {
+          setStreamingContent((prev) => prev + (event.content || ""));
+        } else if (event.type === "final") {
+          finalResponse = event.response || null;
+        } else if (event.type === "error") {
+          throw new Error(event.message || "Erro no stream");
+        }
+      }
+
+      if (finalResponse) {
+        const assistantTurn: AssistantTurn = {
+          id: makeId("a"),
+          role: "assistant",
+          response: finalResponse
+        };
+        setTurns((prev) => [...prev, assistantTurn]);
+        setStreamingContent(""); // Limpar após adicionar
+      } else {
+        throw new Error("Nenhuma resposta recebida do servidor.");
+      }
+
       const refreshed = await getChats();
       setChats(refreshed.chats);
     } catch (error) {
@@ -347,6 +407,7 @@ export default function App() {
         error: error instanceof Error ? error.message : "Falha ao consultar o backend."
       };
       setTurns((prev) => [...prev, assistantTurn]);
+      setStreamingContent("");
     } finally {
       setLoading(false);
     }
@@ -391,10 +452,17 @@ export default function App() {
 
   function renderViewerPanel() {
     return (
-      <div className="viewer-shell">
+      <div className={`viewer-shell ${readerMode ? "viewer-shell-reader" : ""}`}>
         <div className="viewer-topbar">
           <h2>Fontes</h2>
           <div className="viewer-source-nav">
+            <button
+              type="button"
+              className="small-action"
+              onClick={() => setReaderMode((prev) => !prev)}
+            >
+              {readerMode ? "Sair leitura" : "Expandir leitura"}
+            </button>
             <button
               type="button"
               className="small-action"
@@ -419,7 +487,7 @@ export default function App() {
             </button>
           </div>
         </div>
-        {viewerHasSources ? (
+        {viewerHasSources && !readerMode ? (
           <div className="viewer-source-list">
             {viewerSources.map((item, idx) => (
               <button
@@ -437,7 +505,7 @@ export default function App() {
         )}
         {viewerError ? <p className="error-text viewer-error">{viewerError}</p> : null}
         <div className="viewer-body">
-          <SourceViewer source={activeViewerSource} />
+          <SourceViewer source={activeViewerSource} readerMode={readerMode} />
         </div>
       </div>
     );
@@ -446,7 +514,7 @@ export default function App() {
   const activeChat = useMemo(() => chats.find((item) => item.id === activeChatId) ?? null, [chats, activeChatId]);
 
   return (
-    <div className="app-root">
+    <div className={`app-root ${readerMode ? "reader-mode" : ""}`}>
       {mobileSidebarOpen ? (
         <button
           type="button"
@@ -461,7 +529,7 @@ export default function App() {
 
       <aside className={`sidebar-column ${mobileSidebarOpen ? "open" : ""}`}>
         <div className="sidebar-header">
-          <h1>Spiritism RAG</h1>
+          <h1>Local RAG</h1>
           <button
             type="button"
             className="sidebar-close mobile-only"
@@ -484,6 +552,25 @@ export default function App() {
         >
           + Novo chat
         </button>
+
+        <div className="mode-toggle">
+          <button
+            type="button"
+            className={chatMode === 'search' ? 'active' : ''}
+            onClick={() => setChatMode('search')}
+            title="Pesquisa Única: Cada consulta cria um novo chat isolado"
+          >
+            Pesquisa
+          </button>
+          <button
+            type="button"
+            className={chatMode === 'chat' ? 'active' : ''}
+            onClick={() => setChatMode('chat')}
+            title="Chat com Memória: Mantém contexto entre mensagens"
+          >
+            Chat
+          </button>
+        </div>
 
         <div className="sidebar-upload">
           <input
@@ -515,6 +602,41 @@ export default function App() {
           {uploading ? <progress className="upload-progress" max={100} value={uploadProgress} /> : null}
           {uploadMessage ? <p className="sidebar-status">{uploadMessage}</p> : null}
           <p className="sidebar-status">Biblioteca: {docs.length} docs</p>
+        </div>
+
+
+
+        <div className="docs-hub">
+          <div className="docs-hub-header">
+            <h3>HUB de Documentos</h3>
+            <span>{docs.length} total</span>
+          </div>
+          <p className="docs-hub-help">Marque os documentos que a IA deve considerar na busca.</p>
+          <div className="docs-hub-list">
+            {docs.length ? docs.map((doc) => (
+              <article key={doc.id} className="docs-hub-item">
+                <label className="docs-hub-toggle">
+                  <input
+                    type="checkbox"
+                    checked={doc.is_enabled}
+                    onChange={(event) => {
+                      void handleToggleDoc(doc, event.target.checked);
+                    }}
+                  />
+                  <span title={doc.file_name}>{doc.file_name}</span>
+                </label>
+                <button
+                  type="button"
+                  className="docs-hub-delete"
+                  onClick={() => {
+                    void handleDeleteDoc(doc);
+                  }}
+                >
+                  Apagar
+                </button>
+              </article>
+            )) : <p className="sidebar-status">Nenhum documento carregado.</p>}
+          </div>
         </div>
 
         <div className="chat-list">
@@ -625,6 +747,11 @@ export default function App() {
           {loading ? (
             <article className="assistant-card typing-card">
               <p>Digitando...</p>
+              {streamingContent && (
+                <div className="streaming-content">
+                  <p>{streamingContent}</p>
+                </div>
+              )}
             </article>
           ) : null}
         </div>

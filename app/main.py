@@ -6,9 +6,9 @@ import os
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
@@ -22,6 +22,7 @@ from app.models.schemas import (
     ChatMessagesResponse,
     ChatsResponse,
     DocItem,
+    DocUpdateRequest,
     DocsResponse,
     HighlightResponse,
     IngestRequest,
@@ -65,7 +66,9 @@ db = Database(settings.db_path)
 embedding_service = EmbeddingService(settings)
 vector_store = VectorStore(settings)
 query_planner = QueryPlanner(settings)
-retrieval_service = RetrievalService(db, settings, embedding_service, vector_store, query_planner=query_planner)
+retrieval_service = RetrievalService(
+    db, settings, embedding_service, vector_store, query_planner=query_planner
+)
 ingestion_service = IngestionService(db, settings, embedding_service, vector_store)
 llm_service = LLMService(settings)
 validator = ResponseValidator()
@@ -78,7 +81,9 @@ upload_service = UploadService(settings, ingestion_service)
 def startup_event() -> None:
     loaded = vector_store.load()
     if not loaded:
-        logger.info("No persisted FAISS index found. Rebuilding from SQLite embeddings.")
+        logger.info(
+            "No persisted FAISS index found. Rebuilding from SQLite embeddings."
+        )
         vector_store.rebuild_from_db(db)
 
 
@@ -106,7 +111,9 @@ async def upload_document(file: UploadFile = File(...)) -> UploadResponse:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
     except Exception as exc:
         logger.exception("Unhandled upload failure")
-        raise HTTPException(status_code=500, detail="Falha ao processar upload do arquivo.") from exc
+        raise HTTPException(
+            status_code=500, detail="Falha ao processar upload do arquivo."
+        ) from exc
     return UploadResponse(
         ok=True,
         saved_as=result.saved_as,
@@ -118,7 +125,11 @@ async def upload_document(file: UploadFile = File(...)) -> UploadResponse:
 
 @app.get("/ingest/status", response_model=IngestStatusResponse)
 def ingest_status_latest(job_id: str | None = None) -> IngestStatusResponse:
-    status = ingestion_service.get_job_status(job_id) if job_id else ingestion_service.get_latest_job_status()
+    status = (
+        ingestion_service.get_job_status(job_id)
+        if job_id
+        else ingestion_service.get_latest_job_status()
+    )
     if status is None:
         raise HTTPException(status_code=404, detail="Ingest job not found.")
     return IngestStatusResponse(**status)
@@ -132,10 +143,19 @@ def ingest_status(job_id: str) -> IngestStatusResponse:
     return IngestStatusResponse(**status)
 
 
-@app.post("/chat")
-def chat(request: ChatRequest) -> dict:
+@app.post("/chat", response_model=None)
+def chat(request: ChatRequest, stream: bool = Query(False)):
+    if stream:
+        return StreamingResponse(
+            chat_service.answer_stream(
+                question=request.question, conversation_id=request.conversation_id
+            ),
+            media_type="application/x-ndjson",
+        )
     try:
-        return chat_service.answer(question=request.question, conversation_id=request.conversation_id)
+        return chat_service.answer(
+            question=request.question, conversation_id=request.conversation_id
+        )
     except Exception:
         logger.exception("Unhandled chat failure")
         fallback = validator.minimal_not_found()
@@ -187,7 +207,10 @@ def create_chat(request: ChatCreateRequest | None = None) -> ChatItem:
         """,
         [chat_id, title[:120]],
     )
-    row = db.fetchone("SELECT id, title, created_at, updated_at FROM conversations WHERE id = ?", [chat_id])
+    row = db.fetchone(
+        "SELECT id, title, created_at, updated_at FROM conversations WHERE id = ?",
+        [chat_id],
+    )
     if row is None:
         raise HTTPException(status_code=500, detail="Falha ao criar chat.")
     return ChatItem(
@@ -214,7 +237,10 @@ def rename_chat(chat_id: str, request: ChatRenameRequest) -> ChatItem:
         """,
         [title[:120], chat_id],
     )
-    updated = db.fetchone("SELECT id, title, created_at, updated_at FROM conversations WHERE id = ?", [chat_id])
+    updated = db.fetchone(
+        "SELECT id, title, created_at, updated_at FROM conversations WHERE id = ?",
+        [chat_id],
+    )
     if updated is None:
         raise HTTPException(status_code=500, detail="Falha ao atualizar chat.")
     return ChatItem(
@@ -267,11 +293,18 @@ def get_chat_messages(chat_id: str) -> ChatMessagesResponse:
     return ChatMessagesResponse(chat_id=chat_id, messages=messages)
 
 
-@app.post("/chats/{chat_id}/messages")
-def post_chat_message(chat_id: str, request: ChatRequest) -> dict:
+@app.post("/chats/{chat_id}/messages", response_model=None)
+def post_chat_message(chat_id: str, request: ChatRequest, stream: bool = Query(False)):
     row = db.fetchone("SELECT id FROM conversations WHERE id = ?", [chat_id])
     if row is None:
         raise HTTPException(status_code=404, detail="Chat nao encontrado.")
+    if stream:
+        return StreamingResponse(
+            chat_service.answer_stream(
+                question=request.question, conversation_id=chat_id
+            ),
+            media_type="application/x-ndjson",
+        )
     try:
         return chat_service.answer(question=request.question, conversation_id=chat_id)
     except Exception:
@@ -294,7 +327,9 @@ def post_chat_message(chat_id: str, request: ChatRequest) -> dict:
 
 @app.get("/docs", response_model=DocsResponse)
 def list_docs() -> DocsResponse:
-    rows = db.fetchall("SELECT id, file_path, file_name, sha256, page_count FROM docs ORDER BY file_name")
+    rows = db.fetchall(
+        "SELECT id, file_path, file_name, sha256, page_count, is_enabled FROM docs ORDER BY file_name"
+    )
     docs = [
         DocItem(
             id=row["id"],
@@ -302,10 +337,52 @@ def list_docs() -> DocsResponse:
             file_name=row["file_name"],
             sha256=row["sha256"],
             page_count=row["page_count"],
+            is_enabled=bool(row["is_enabled"]),
         )
         for row in rows
     ]
     return DocsResponse(docs=docs)
+
+
+@app.patch("/docs/{doc_id}", response_model=DocItem)
+def update_doc(doc_id: str, request: DocUpdateRequest) -> DocItem:
+    row = db.fetchone("SELECT id FROM docs WHERE id = ?", [doc_id])
+    if row is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    db.execute(
+        "UPDATE docs SET is_enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        [1 if request.is_enabled else 0, doc_id],
+    )
+    updated = db.fetchone(
+        "SELECT id, file_path, file_name, sha256, page_count, is_enabled FROM docs WHERE id = ?",
+        [doc_id],
+    )
+    if updated is None:
+        raise HTTPException(status_code=500, detail="Failed to update document.")
+    return DocItem(
+        id=updated["id"],
+        file_path=updated["file_path"],
+        file_name=updated["file_name"],
+        sha256=updated["sha256"],
+        page_count=updated["page_count"],
+        is_enabled=bool(updated["is_enabled"]),
+    )
+
+
+@app.delete("/docs/{doc_id}")
+def delete_doc(doc_id: str) -> dict[str, bool]:
+    row = db.fetchone("SELECT id, file_path FROM docs WHERE id = ?", [doc_id])
+    if row is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    file_path = Path(str(row["file_path"]))
+    db.execute("DELETE FROM docs WHERE id = ?", [doc_id])
+    try:
+        if file_path.exists():
+            file_path.unlink()
+    except Exception:
+        logger.warning("Failed to remove file from disk: %s", file_path)
+    vector_store.rebuild_from_db(db)
+    return {"ok": True}
 
 
 @app.get("/docs/{doc_id}/pdf")
@@ -318,7 +395,9 @@ def get_doc_pdf(doc_id: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="PDF file not found on disk.")
     if file_path.suffix.lower() != ".pdf":
         raise HTTPException(status_code=400, detail="Document is not a PDF.")
-    return FileResponse(path=file_path, filename=row["file_name"], media_type="application/pdf")
+    return FileResponse(
+        path=file_path, filename=row["file_name"], media_type="application/pdf"
+    )
 
 
 @app.get("/docs/{doc_id}/page/{page_number}/text", response_model=PageTextResponse)
@@ -352,7 +431,14 @@ frontend_index_file = frontend_dist_dir / "index.html"
 def frontend_root():
     if frontend_index_file.exists():
         return FileResponse(str(frontend_index_file))
-    return {"status": "ok", "message": "Frontend build not found. Run launcher.py to build the UI."}
+    return {
+        "status": "ok",
+        "message": "Frontend build not found. Run launcher.py to build the UI.",
+    }
 
 
-app.mount("/", StaticFiles(directory=str(frontend_dist_dir), html=True, check_dir=False), name="frontend")
+app.mount(
+    "/",
+    StaticFiles(directory=str(frontend_dist_dir), html=True, check_dir=False),
+    name="frontend",
+)

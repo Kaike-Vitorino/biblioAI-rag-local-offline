@@ -6,9 +6,10 @@ import PDFPageViewer from "./PDFPageViewer";
 type SourceViewerProps = {
   source: SourceSelection | null;
   onClose?: () => void;
+  readerMode?: boolean;
 };
 
-export default function SourceViewer({ source, onClose }: SourceViewerProps) {
+export default function SourceViewer({ source, onClose, readerMode = false }: SourceViewerProps) {
   const [pageNumber, setPageNumber] = useState<number>(1);
   const [matchIndex, setMatchIndex] = useState<number>(0);
   const [matchCount, setMatchCount] = useState<number>(0);
@@ -16,6 +17,24 @@ export default function SourceViewer({ source, onClose }: SourceViewerProps) {
   const [textPageContent, setTextPageContent] = useState<string>("");
   const [textLoading, setTextLoading] = useState(false);
   const [textError, setTextError] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(1.35);
+  const [fitWidth, setFitWidth] = useState(true);
+  const [copyStatus, setCopyStatus] = useState<string>("");
+
+  async function copySelectedText() {
+    const selection = window.getSelection();
+    const text = selection?.toString().trim() || "";
+    if (!text) {
+      setCopyStatus("Selecione um trecho para copiar.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyStatus("Trecho copiado.");
+    } catch {
+      setCopyStatus("Falha ao copiar trecho.");
+    }
+  }
 
   useEffect(() => {
     if (!source) return;
@@ -59,7 +78,7 @@ export default function SourceViewer({ source, onClose }: SourceViewerProps) {
 
   if (!source) {
     return (
-      <aside className="source-panel empty">
+      <aside className={`source-panel empty ${readerMode ? "reader-mode" : ""}`}>
         <h2>Fonte</h2>
         <p>Selecione uma citação para abrir o viewer da fonte.</p>
       </aside>
@@ -71,20 +90,22 @@ export default function SourceViewer({ source, onClose }: SourceViewerProps) {
   const canCycleMatch = source.isPdf && matchCount > 1;
 
   return (
-    <aside className="source-panel">
-      <div className="source-panel-header">
-        <h2>Fonte</h2>
-        {onClose ? (
-          <button className="close-button" type="button" onClick={onClose}>
-            Fechar
-          </button>
-        ) : null}
-      </div>
-      <p className="source-meta">
-        <strong>{source.fileName}</strong> · p. {pageNumber}
-      </p>
-      <p className="source-meta">source_id: {source.sourceId}</p>
-      <p className="source-meta">highlight: {source.method}</p>
+    <aside className={`source-panel ${readerMode ? "reader-mode" : ""}`}>
+      {!readerMode ? (
+        <>
+          <div className="source-panel-header">
+            <h2>Fonte</h2>
+            {onClose ? (
+              <button className="close-button" type="button" onClick={onClose}>
+                Fechar
+              </button>
+            ) : null}
+          </div>
+          <p className="source-meta">
+            <strong>{source.fileName}</strong> · p. {pageNumber}
+          </p>
+        </>
+      ) : null}
       <div className="source-controls">
         <button type="button" disabled={!canGoPrevPage} onClick={() => setPageNumber((p) => Math.max(1, p - 1))}>
           Pagina anterior
@@ -95,10 +116,24 @@ export default function SourceViewer({ source, onClose }: SourceViewerProps) {
         <button type="button" disabled={!canCycleMatch} onClick={() => setMatchIndex((i) => i + 1)}>
           Proximo match
         </button>
+        <div className="zoom-controls">
+           <button type="button" onClick={() => { setFitWidth(false); setZoom(z => Math.max(0.5, z - 0.1)); }}>-</button>
+           <span>{Math.round(zoom * 100)}%</span>
+           <button type="button" onClick={() => { setFitWidth(false); setZoom(z => Math.min(3.0, z + 0.1)); }}>+</button>
+           <button type="button" onClick={() => { setFitWidth(false); setZoom(1.35); }}>Ajustar</button>
+           <button type="button" className={fitWidth ? "active" : ""} onClick={() => setFitWidth(true)}>Largura</button>
+           <button type="button" onClick={() => { void copySelectedText(); }}>Copiar selecao</button>
+        </div>
       </div>
-      <p className="source-snippet">
-        <strong>Snippet:</strong> {source.snippet || "Nao informado"}
-      </p>
+      {copyStatus ? <p className="source-meta">{copyStatus}</p> : null}
+      {!readerMode ? (
+        <details className="source-snippet-details">
+          <summary>Trecho citado</summary>
+          <p className="source-snippet">
+            {source.snippet || "Nao informado"}
+          </p>
+        </details>
+      ) : null}
       {source.isPdf ? (
         <PDFPageViewer
           pdfUrl={getPdfUrl(source.docId)}
@@ -107,6 +142,8 @@ export default function SourceViewer({ source, onClose }: SourceViewerProps) {
           matchIndex={matchIndex}
           onPageCount={setPageCount}
           onMatchCount={setMatchCount}
+          zoom={zoom}
+          fitWidth={fitWidth}
         />
       ) : (
         <div className="text-source-panel">
