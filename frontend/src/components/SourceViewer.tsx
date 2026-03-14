@@ -139,6 +139,7 @@ export default function SourceViewer({ source, onClose, readerMode = false }: So
           pdfUrl={getPdfUrl(source.docId)}
           pageNumber={pageNumber}
           snippet={source.snippet}
+          highlightQuery={source.highlightQuery || ""}
           matchIndex={matchIndex}
           onPageCount={setPageCount}
           onMatchCount={setMatchCount}

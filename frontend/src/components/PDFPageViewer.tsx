@@ -13,6 +13,7 @@ type PDFPageViewerProps = {
   pdfUrl: string;
   pageNumber: number;
   snippet: string;
+  highlightQuery: string;
   matchIndex: number;
   onPageCount?: (pageCount: number) => void;
   onMatchCount?: (matchCount: number) => void;
@@ -30,44 +31,42 @@ function normalizeForMatch(text: string): string {
     .trim();
 }
 
-function findSnippetMatches(spans: HTMLSpanElement[], snippet: string): number[][] {
-  const normalizedSnippetFull = normalizeForMatch(snippet);
-  const normalizedSnippet = normalizedSnippetFull
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 14)
-    .join(" ");
-  if (!normalizedSnippet) return [];
-  const matches: number[][] = [];
+function extractQueryTerms(query: string): string[] {
+  const normalized = normalizeForMatch(query);
+  if (!normalized) return [];
+  const stopwords = new Set(["que", "como", "para", "isso", "essa", "esse", "tem", "mais", "sobre", "dos", "das", "uma", "umas", "uns", "por", "com", "sem", "ser", "foi", "sao", "só", "so", "ter", "ha", "há"]);
+  const unique: string[] = [];
   const seen = new Set<string>();
+  for (const term of normalized.split(" ")) {
+    if (!term || term.length < 3 || stopwords.has(term) || seen.has(term)) continue;
+    seen.add(term);
+    unique.push(term);
+  }
+  return unique;
+}
 
+function findTermMatches(spans: HTMLSpanElement[], query: string): number[][] {
+  const terms = extractQueryTerms(query);
+  if (!terms.length) return [];
+  const matches: number[][] = [];
   for (let i = 0; i < spans.length; i += 1) {
-    let combined = "";
-    const indices: number[] = [];
-    for (let j = i; j < spans.length && j < i + 32; j += 1) {
-      const text = normalizeForMatch(spans[j].textContent ?? "");
-      if (!text) continue;
-      combined = combined ? `${combined} ${text}` : text;
-      indices.push(j);
-      if (combined.includes(normalizedSnippet)) {
-        const key = `${indices[0]}-${indices[indices.length - 1]}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          matches.push([...indices]);
-        }
+    const text = normalizeForMatch(spans[i].textContent ?? "");
+    if (!text) continue;
+    for (const term of terms) {
+      if (text.includes(term)) {
+        matches.push([i]);
         break;
       }
-      if (combined.length > Math.max(120, normalizedSnippet.length * 2.2)) break;
     }
   }
-  matches.sort((a, b) => a.length - b.length);
-  return matches.slice(0, 8);
+  return matches;
 }
 
 export default function PDFPageViewer({
   pdfUrl,
   pageNumber,
   snippet,
+  highlightQuery,
   matchIndex,
   onPageCount,
   onMatchCount,
@@ -178,7 +177,7 @@ export default function PDFPageViewer({
       }
 
       const spans = Array.from(textLayer.querySelectorAll<HTMLSpanElement>("span.text-fragment"));
-      const matches = findSnippetMatches(spans, snippet);
+      const matches = findTermMatches(spans, highlightQuery || snippet);
       onMatchCount?.(matches.length);
 
       for (const span of spans) {
@@ -208,7 +207,7 @@ export default function PDFPageViewer({
     return () => {
       cancelled = true;
     };
-  }, [pdfDoc, boundedPage, snippet, matchIndex, onMatchCount, zoom, fitWidth]);
+  }, [pdfDoc, boundedPage, snippet, highlightQuery, matchIndex, onMatchCount, zoom, fitWidth]);
 
   useEffect(() => {
     setCurrentPage(boundedPage);

@@ -1191,15 +1191,15 @@ blockquote {
 }
 
 .text-fragment.matched-highlight {
-  background: rgba(255, 224, 102, 0.5);
+  background: rgba(96, 165, 250, 0.28);
   border-radius: 2px;
-  box-shadow: inset 0 -1px 0 rgba(84, 57, 11, 0.2);
+  box-shadow: inset 0 -1px 0 rgba(30, 64, 175, 0.18);
 }
 
 .text-fragment.active-highlight {
-  background: rgba(255, 163, 34, 0.62);
+  background: rgba(37, 99, 235, 0.32);
   border-radius: 2px;
-  box-shadow: 0 0 0 1px rgba(120, 72, 0, 0.35), inset 0 -1px 0 rgba(94, 45, 0, 0.35);
+  box-shadow: 0 0 0 1px rgba(29, 78, 216, 0.38), inset 0 -1px 0 rgba(30, 64, 175, 0.28);
 }
 
 .pdf-text-layer ::selection,

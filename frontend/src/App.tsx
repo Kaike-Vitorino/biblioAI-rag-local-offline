@@ -431,7 +431,8 @@ export default function App() {
         isPdf: fileName.toLowerCase().endsWith(".pdf"),
         start: first?.start,
         end: first?.end,
-        method: details.method
+        method: details.method,
+        highlightQuery: "highlight_query" in source ? source.highlight_query : undefined,
       };
       const key = `${selection.sourceId}::${selection.pageNumber}`;
       setViewerSources((prev) => {

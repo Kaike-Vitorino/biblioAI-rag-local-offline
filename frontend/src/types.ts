@@ -7,6 +7,7 @@ export type Citation = {
   page_start: number;
   page_end: number;
   quote: string;
+  highlight_query?: string;
 };
 
 export type Claim = {
@@ -29,6 +30,7 @@ export type SourceUsed = {
   file_path: string;
   page_start: number;
   page_end: number;
+  highlight_query?: string;
 };
 
 export type AllReference = SourceUsed & {
@@ -152,4 +154,5 @@ export type SourceSelection = {
   start?: number | null;
   end?: number | null;
   method: string;
+  highlightQuery?: string;
 };
