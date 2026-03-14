@@ -649,15 +649,16 @@ button {
 }
 
 .assistant-card h3 {
-  margin: 0 0 12px;
-  font-size: 1.1rem;
-  font-weight: 600;
+  margin: 0 0 16px;
+  font-size: 1.15rem;
+  font-weight: 700;
   color: var(--accent-primary);
+  letter-spacing: -0.01em;
 }
 
 .assistant-card p,
 .assistant-card li {
-  margin: 0 0 8px;
+  margin: 0 0 12px;
 }
 
 .assistant-card p:last-child {
@@ -763,13 +764,13 @@ button {
 .claim-item,
 .quote-item {
   border: 1px solid var(--border-glass);
-  border-radius: 12px;
-  padding: 16px;
+  border-radius: 16px;
+  padding: 20px;
   background: var(--bg-glass);
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  transition: all 0.2s ease;
+  gap: 10px;
+  transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
 .qa-item:hover,
