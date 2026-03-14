@@ -70,11 +70,15 @@ class IngestionService:
             progress=progress,
             errors=[],
         )
-        thread = threading.Thread(target=self._run_ingest, args=(job_id, path), daemon=True)
+        thread = threading.Thread(
+            target=self._run_ingest, args=(job_id, path), daemon=True
+        )
         thread.start()
         return job_id
 
-    def start_ingest_if_idle(self, docs_path: str | None = None) -> tuple[str | None, bool]:
+    def start_ingest_if_idle(
+        self, docs_path: str | None = None
+    ) -> tuple[str | None, bool]:
         active = self.get_active_job_status()
         if active is not None:
             return active["job_id"], False
@@ -87,7 +91,9 @@ class IngestionService:
         return self._row_to_job_status(row)
 
     def get_latest_job_status(self) -> dict[str, Any] | None:
-        row = self.db.fetchone("SELECT * FROM ingest_jobs ORDER BY created_at DESC LIMIT 1")
+        row = self.db.fetchone(
+            "SELECT * FROM ingest_jobs ORDER BY created_at DESC LIMIT 1"
+        )
         if row is None:
             return None
         return self._row_to_job_status(row)
@@ -167,8 +173,8 @@ class IngestionService:
                     else:
                         progress["updated"] += 1
                 except Exception as exc:
-                    logger.exception("Failed to ingest file %s", pdf_path)
-                    errors.append(f"{pdf_path}: {exc}")
+                    logger.exception("Failed to ingest file %s", file_path)
+                    errors.append(f"{file_path}: {exc}")
                     progress["files_done"] += 1
 
                 self.db.upsert_ingest_job(
@@ -249,12 +255,16 @@ class IngestionService:
         file_path = str(pdf_path.resolve())
         file_name = pdf_path.name
         sha256 = _sha256_file(pdf_path)
-        existing = self.db.fetchone("SELECT * FROM docs WHERE file_path = ?", [file_path])
+        existing = self.db.fetchone(
+            "SELECT * FROM docs WHERE file_path = ?", [file_path]
+        )
 
         if existing and existing["sha256"] == sha256:
             doc_id = existing["id"]
             if not self._doc_has_complete_embeddings(doc_id):
-                logger.warning("Embeddings incompletos para %s. Regenerando embeddings.", file_name)
+                logger.warning(
+                    "Embeddings incompletos para %s. Regenerando embeddings.", file_name
+                )
                 self._create_embeddings_for_doc(doc_id)
             return {"skipped": True, "pages": 0, "chunks": 0}
 
@@ -262,7 +272,9 @@ class IngestionService:
             doc_id_to_delete = existing["id"]
             with self.db.transaction() as cursor:
                 cursor.execute("DELETE FROM docs WHERE id = ?", [doc_id_to_delete])
-                cursor.execute("DELETE FROM chunks_fts WHERE doc_id = ?", [doc_id_to_delete])
+                cursor.execute(
+                    "DELETE FROM chunks_fts WHERE doc_id = ?", [doc_id_to_delete]
+                )
 
         doc_id = f"doc_{uuid.uuid4().hex}"
         pages_to_insert: list[tuple[str, str, int, str]] = []
@@ -270,39 +282,57 @@ class IngestionService:
         chunks_fts_to_insert: list[tuple[str, str, str]] = []
 
         total_pages = 0
-        with fitz.open(pdf_path) as pdf:
-            total_pages = pdf.page_count
-            for page_idx in range(pdf.page_count):
-                page_number = page_idx + 1
-                page_text = pdf[page_idx].get_text("text") or ""
-                pages_to_insert.append((f"page_{uuid.uuid4().hex}", doc_id, page_number, page_text))
-                chunk_slices = chunk_page_text(
-                    page_text=page_text,
-                    page_number=page_number,
-                    chunk_size=self.settings.chunk_size,
-                    overlap=self.settings.chunk_overlap,
-                )
-                for local_idx, slice_item in enumerate(chunk_slices):
-                    chunk_id = f"{doc_id}_p{page_number}_c{local_idx}"
-                    offsets = {
-                        "page_number": page_number,
-                        "char_start_in_page": slice_item.char_start_in_page,
-                        "char_end_in_page": slice_item.char_end_in_page,
-                        "snippet": slice_item.text[:300],
-                    }
-                    chunks_to_insert.append(
-                        (
-                            f"chk_{uuid.uuid4().hex}",
-                            doc_id,
-                            chunk_id,
-                            page_number,
-                            page_number,
-                            slice_item.text,
-                            slice_item.token_count,
-                            json.dumps(offsets, ensure_ascii=False),
-                        )
+        try:
+            with fitz.open(pdf_path) as pdf:
+                total_pages = pdf.page_count
+                for page_idx in range(pdf.page_count):
+                    page_number = page_idx + 1
+                    # Garantir conversão segura para string
+                    raw_text = pdf[page_idx].get_text("text")
+                    if isinstance(raw_text, str):
+                        page_text = raw_text
+                    else:
+                        page_text = str(raw_text) if raw_text else ""
+
+                    # Fallback simples para texto vazio
+                    if not page_text.strip():
+                        page_text = "[Imagem sem texto detectável]"
+
+                    pages_to_insert.append(
+                        (f"page_{uuid.uuid4().hex}", doc_id, page_number, page_text)
                     )
-                    chunks_fts_to_insert.append((slice_item.text, chunk_id, doc_id))
+
+                    # Chunking
+                    chunk_slices = chunk_page_text(
+                        page_text=page_text,
+                        page_number=page_number,
+                        chunk_size=self.settings.chunk_size,
+                        overlap=self.settings.chunk_overlap,
+                    )
+                    for local_idx, slice_item in enumerate(chunk_slices):
+                        chunk_id = f"{doc_id}_p{page_number}_c{local_idx}"
+                        offsets = {
+                            "page_number": page_number,
+                            "char_start_in_page": slice_item.char_start_in_page,
+                            "char_end_in_page": slice_item.char_end_in_page,
+                            "snippet": slice_item.text[:300],
+                        }
+                        chunks_to_insert.append(
+                            (
+                                f"chk_{uuid.uuid4().hex}",
+                                doc_id,
+                                chunk_id,
+                                page_number,
+                                page_number,
+                                slice_item.text,
+                                slice_item.token_count,
+                                json.dumps(offsets, ensure_ascii=False),
+                            )
+                        )
+                        chunks_fts_to_insert.append((slice_item.text, chunk_id, doc_id))
+        except Exception as e:
+            logger.error(f"Error processing PDF {pdf_path}: {e}")
+            raise
 
         with self.db.transaction() as cursor:
             cursor.execute(
@@ -346,12 +376,16 @@ class IngestionService:
         file_path = str(text_path.resolve())
         file_name = text_path.name
         sha256 = _sha256_file(text_path)
-        existing = self.db.fetchone("SELECT * FROM docs WHERE file_path = ?", [file_path])
+        existing = self.db.fetchone(
+            "SELECT * FROM docs WHERE file_path = ?", [file_path]
+        )
 
         if existing and existing["sha256"] == sha256:
             doc_id = existing["id"]
             if not self._doc_has_complete_embeddings(doc_id):
-                logger.warning("Embeddings incompletos para %s. Regenerando embeddings.", file_name)
+                logger.warning(
+                    "Embeddings incompletos para %s. Regenerando embeddings.", file_name
+                )
                 self._create_embeddings_for_doc(doc_id)
             return {"skipped": True, "pages": 0, "chunks": 0}
 
@@ -359,7 +393,9 @@ class IngestionService:
             doc_id_to_delete = existing["id"]
             with self.db.transaction() as cursor:
                 cursor.execute("DELETE FROM docs WHERE id = ?", [doc_id_to_delete])
-                cursor.execute("DELETE FROM chunks_fts WHERE doc_id = ?", [doc_id_to_delete])
+                cursor.execute(
+                    "DELETE FROM chunks_fts WHERE doc_id = ?", [doc_id_to_delete]
+                )
 
         page_text = self._read_text_file(text_path)
         doc_id = f"doc_{uuid.uuid4().hex}"
@@ -473,7 +509,9 @@ class IngestionService:
             for i in range(0, len(rows), batch_size):
                 batch = rows[i : i + batch_size]
                 texts = [row["text"] for row in batch]
-                vectors = self.embedding_service.embed_texts(texts, expected_dim=expected_dim)
+                vectors = self.embedding_service.embed_texts(
+                    texts, expected_dim=expected_dim
+                )
                 if expected_dim is None and vectors.shape[0] > 0:
                     expected_dim = int(vectors.shape[1])
                 for row, vector in zip(batch, vectors):

@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import uuid
-from typing import Any
+from typing import Any, Generator
 
 from app.db.database import Database
 from app.services.llm import LLMService
@@ -28,7 +28,9 @@ class ChatService:
         self.llm_service = llm_service
         self.validator = validator
 
-    def answer(self, question: str, conversation_id: str | None = None) -> dict[str, Any]:
+    def answer(
+        self, question: str, conversation_id: str | None = None
+    ) -> dict[str, Any]:
         conv_id = conversation_id or f"conv_{uuid.uuid4().hex}"
         self._ensure_conversation(conv_id, initial_question=question)
         self._add_message(conv_id, "user", {"question": question})
@@ -41,11 +43,25 @@ class ChatService:
         focus_evidences = [ev for ev in evidences if ev.get("focus_match")]
         if focus_evidences:
             if coverage_request:
-                evidences = self._diversify_by_doc(focus_evidences, min(10, max(6, len(focus_evidences))))
+                evidences = self._diversify_by_doc(
+                    focus_evidences, min(10, max(6, len(focus_evidences)))
+                )
             else:
                 evidences = focus_evidences[: min(8, max(4, len(focus_evidences)))]
 
+        evidences = self._apply_final_evidence_validation(
+            question=question,
+            evidences=evidences,
+            focus_terms=focus_terms,
+        )
+
         if not evidences:
+            all_references = self._apply_final_reference_validation(
+                question=question,
+                references=all_references,
+                focus_terms=focus_terms,
+                used_sources=[],
+            )
             not_found = self.validator.minimal_not_found()
             response_payload = {
                 "conversation_id": conv_id,
@@ -80,7 +96,9 @@ class ChatService:
                     validated = validated_retry
         except Exception as exc:
             llm_error = str(exc)
-            logger.warning("LLM generation failed, switching to extractive fallback: %s", llm_error)
+            logger.warning(
+                "LLM generation failed, switching to extractive fallback: %s", llm_error
+            )
             validated = self.validator.minimal_not_found()
 
         validated = self._enforce_focus_alignment(
@@ -113,6 +131,12 @@ class ChatService:
             retrieval_references=all_references,
             used_sources=validated.get("sources", []),
         )
+        merged_all_references = self._apply_final_reference_validation(
+            question=question,
+            references=merged_all_references,
+            focus_terms=focus_terms,
+            used_sources=validated.get("sources", []),
+        )
 
         response_payload = {
             "conversation_id": conv_id,
@@ -130,6 +154,206 @@ class ChatService:
         self._add_message(conv_id, "assistant", response_payload)
         self._log_retrieval(conv_id, question, retrieval)
         return response_payload
+
+    def answer_stream(
+        self, question: str, conversation_id: str | None = None
+    ) -> Generator[str, None, None]:
+        conv_id = conversation_id or f"conv_{uuid.uuid4().hex}"
+        self._ensure_conversation(conv_id, initial_question=question)
+        self._add_message(conv_id, "user", {"question": question})
+
+        retrieval = self.retrieval_service.retrieve(question)
+        all_references = retrieval.get("all_references", [])
+        focus_terms = retrieval.get("focus_terms", [])
+        coverage_request = bool(retrieval.get("coverage_request"))
+        evidences = retrieval["evidences"]
+        focus_evidences = [ev for ev in evidences if ev.get("focus_match")]
+        if focus_evidences:
+            if coverage_request:
+                evidences = self._diversify_by_doc(
+                    focus_evidences, min(10, max(6, len(focus_evidences)))
+                )
+            else:
+                evidences = focus_evidences[: min(8, max(4, len(focus_evidences)))]
+
+        evidences = self._apply_final_evidence_validation(
+            question=question,
+            evidences=evidences,
+            focus_terms=focus_terms,
+        )
+
+        if not evidences:
+            all_references = self._apply_final_reference_validation(
+                question=question,
+                references=all_references,
+                focus_terms=focus_terms,
+                used_sources=[],
+            )
+            not_found = self.validator.minimal_not_found()
+            response_payload = {
+                "conversation_id": conv_id,
+                "question": question,
+                "searched_terms": retrieval["searched_terms"],
+                "all_references": all_references,
+                **not_found,
+            }
+            self._add_message(conv_id, "assistant", response_payload)
+            yield json.dumps({"type": "start", "conversation_id": conv_id}) + "\n"
+            yield (
+                json.dumps({"type": "content", "content": json.dumps(response_payload)})
+                + "\n"
+            )
+            yield json.dumps({"type": "end"}) + "\n"
+            return
+
+        # Iniciar stream do LLM
+        yield json.dumps({"type": "start", "conversation_id": conv_id}) + "\n"
+
+        full_text = ""
+        try:
+            for chunk in self.llm_service.generate_stream(
+                question,
+                evidences,
+                focus_terms=focus_terms,
+                coverage_request=coverage_request,
+            ):
+                full_text += chunk
+                yield json.dumps({"type": "content", "content": chunk}) + "\n"
+
+            # Tentar fazer o parsing do JSON acumulado
+            parsed = self._parse_json(full_text)
+            if parsed is None:
+                # Fallback: tentar extrair JSON do texto
+                match = re.search(r"\{.*\}", full_text, flags=re.DOTALL)
+                if match:
+                    try:
+                        parsed = json.loads(match.group(0))
+                    except json.JSONDecodeError:
+                        parsed = None
+
+            validated: dict[str, Any] = {}
+            llm_error: str | None = None
+
+            if parsed:
+                validated = self.validator.validate(parsed, evidences)
+            else:
+                llm_error = "Failed to parse LLM response"
+                validated = self.validator.minimal_not_found()
+
+            # Aplicar validações e correções (lógica copiada de answer)
+            if validated.get("not_found") and self._should_retry_not_found(retrieval):
+                # Em modo stream, retry é complicado. Vamos pular ou fazer de forma síncrona se necessário.
+                # Por enquanto, vamos aceitar o resultado inicial.
+                pass
+
+            validated = self._enforce_focus_alignment(
+                validated=validated,
+                evidences=evidences,
+                focus_terms=focus_terms,
+                question=question,
+                llm_error=llm_error,
+            )
+
+            if validated.get("not_found") and evidences:
+                extractive = self._build_extractive_fallback(
+                    question,
+                    evidences,
+                    focus_terms=focus_terms,
+                    coverage_request=coverage_request,
+                    llm_error=llm_error,
+                )
+                if not extractive.get("not_found"):
+                    validated = extractive
+
+            if coverage_request and not validated.get("not_found"):
+                validated = self._enforce_coverage_distribution(
+                    validated=validated,
+                    evidences=evidences,
+                    focus_terms=focus_terms,
+                    question=question,
+                )
+
+            merged_all_references = self._merge_all_references(
+                retrieval_references=all_references,
+                used_sources=validated.get("sources", []),
+            )
+            merged_all_references = self._apply_final_reference_validation(
+                question=question,
+                references=merged_all_references,
+                focus_terms=focus_terms,
+                used_sources=validated.get("sources", []),
+            )
+
+            response_payload = {
+                "conversation_id": conv_id,
+                "question": question,
+                "searched_terms": retrieval["searched_terms"],
+                "all_references": merged_all_references,
+                "not_found": validated.get("not_found", False),
+                "message": validated.get("message"),
+                "synopsis": validated.get("synopsis", ""),
+                "key_points": validated.get("key_points", []),
+                "suggested_qa": validated.get("suggested_qa", []),
+                "claims": validated.get("claims", []),
+                "sources": validated.get("sources", []),
+            }
+
+            self._add_message(conv_id, "assistant", response_payload)
+            self._log_retrieval(conv_id, question, retrieval)
+
+            yield json.dumps({"type": "final", "response": response_payload}) + "\n"
+
+        except Exception as exc:
+            logger.error(f"Streaming error in chat service: {exc}")
+            yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
+
+        yield json.dumps({"type": "end"}) + "\n"
+
+    @staticmethod
+    def _parse_json(raw: str) -> dict[str, Any] | None:
+        raw = raw.strip()
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data
+            return None
+        except json.JSONDecodeError:
+            # Tenta encontrar o primeiro objeto JSON válido
+            match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+            if not match:
+                return None
+            try:
+                data = json.loads(match.group(0))
+                return data if isinstance(data, dict) else None
+            except json.JSONDecodeError:
+                return None
+
+    def _apply_final_evidence_validation(
+        self,
+        question: str,
+        evidences: list[dict[str, Any]],
+        focus_terms: list[str],
+    ) -> list[dict[str, Any]]:
+        if not evidences:
+            return []
+        try:
+            keep_ids = self.llm_service.validate_evidence_relevance(
+                question=question,
+                evidences=evidences,
+                focus_terms=focus_terms,
+                max_keep=max(4, min(10, len(evidences))),
+            )
+        except Exception:
+            return evidences
+
+        keep_set = {sid for sid in keep_ids if sid}
+        if not keep_set:
+            return evidences
+
+        filtered = [ev for ev in evidences if str(ev.get("source_id", "")) in keep_set]
+        return filtered or evidences
 
     @staticmethod
     def _merge_all_references(
@@ -152,6 +376,9 @@ class ChatService:
                 "page_start": int(item.get("page_start", 0) or 0),
                 "page_end": int(item.get("page_end", 0) or 0),
             }
+            text_value = str(item.get("text", "") or "").strip()
+            if text_value:
+                normalized["text"] = text_value[:1200]
             if "score" in item:
                 try:
                     normalized["score"] = float(item.get("score", 0.0))
@@ -172,8 +399,71 @@ class ChatService:
 
         return [merged[source_id] for source_id in ordered_ids if source_id in merged]
 
-    def _ensure_conversation(self, conversation_id: str, initial_question: str | None = None) -> None:
-        row = self.db.fetchone("SELECT id, title FROM conversations WHERE id = ?", [conversation_id])
+    def _apply_final_reference_validation(
+        self,
+        question: str,
+        references: list[dict[str, Any]],
+        focus_terms: list[str],
+        used_sources: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not references:
+            return []
+
+        refs_with_text: list[dict[str, Any]] = []
+        by_source: dict[str, dict[str, Any]] = {}
+        for ref in references:
+            source_id = str(ref.get("source_id", "")).strip()
+            if not source_id:
+                continue
+            by_source[source_id] = ref
+            text = str(ref.get("text", "") or "").strip()
+            if text:
+                refs_with_text.append(
+                    {
+                        "source_id": source_id,
+                        "chunk_id": str(ref.get("chunk_id", source_id)),
+                        "doc_id": str(ref.get("doc_id", "")),
+                        "file_name": str(ref.get("file_name", "")),
+                        "file_path": str(ref.get("file_path", "")),
+                        "page_start": int(ref.get("page_start", 0) or 0),
+                        "page_end": int(ref.get("page_end", 0) or 0),
+                        "text": text,
+                    }
+                )
+
+        if not refs_with_text:
+            return references
+
+        keep_ids = self.llm_service.validate_evidence_relevance(
+            question=question,
+            evidences=refs_with_text,
+            focus_terms=focus_terms,
+            max_keep=max(8, len(refs_with_text)),
+        )
+        keep_set = {sid for sid in keep_ids if sid}
+
+        # Garante que fontes efetivamente usadas na resposta nao desaparecam do painel
+        for src in used_sources:
+            sid = str(src.get("source_id", "")).strip()
+            if sid:
+                keep_set.add(sid)
+
+        if not keep_set:
+            return references
+
+        filtered = [
+            ref
+            for ref in references
+            if str(ref.get("source_id", "")).strip() in keep_set
+        ]
+        return filtered or references
+
+    def _ensure_conversation(
+        self, conversation_id: str, initial_question: str | None = None
+    ) -> None:
+        row = self.db.fetchone(
+            "SELECT id, title FROM conversations WHERE id = ?", [conversation_id]
+        )
         if row is None:
             title = self._title_from_question(initial_question)
             self.db.execute(
@@ -186,7 +476,11 @@ class ChatService:
             return
         if initial_question:
             existing_title = str(row["title"] or "").strip()
-            if not existing_title or existing_title.lower() in {"novo chat", "new chat", "chat"}:
+            if not existing_title or existing_title.lower() in {
+                "novo chat",
+                "new chat",
+                "chat",
+            }:
                 self.db.execute(
                     """
                     UPDATE conversations
@@ -196,13 +490,20 @@ class ChatService:
                     [self._title_from_question(initial_question), conversation_id],
                 )
 
-    def _add_message(self, conversation_id: str, role: str, content: dict[str, Any]) -> None:
+    def _add_message(
+        self, conversation_id: str, role: str, content: dict[str, Any]
+    ) -> None:
         self.db.execute(
             """
             INSERT INTO messages(id, conversation_id, role, content_json)
             VALUES (?, ?, ?, ?)
             """,
-            [f"msg_{uuid.uuid4().hex}", conversation_id, role, json.dumps(content, ensure_ascii=False)],
+            [
+                f"msg_{uuid.uuid4().hex}",
+                conversation_id,
+                role,
+                json.dumps(content, ensure_ascii=False),
+            ],
         )
         self.db.execute(
             """
@@ -225,7 +526,9 @@ class ChatService:
             return compact
         return compact[:max_len].rstrip() + "..."
 
-    def _log_retrieval(self, conversation_id: str, question: str, retrieval: dict[str, Any]) -> None:
+    def _log_retrieval(
+        self, conversation_id: str, question: str, retrieval: dict[str, Any]
+    ) -> None:
         self.db.execute(
             """
             INSERT INTO retrieval_logs(id, conversation_id, question, searched_terms_json, selected_evidence_json)
@@ -267,7 +570,11 @@ class ChatService:
             return self.validator.minimal_not_found()
 
         focus_stems = self._focus_stems(focus_terms, question)
-        focus_first = [ev for ev in evidences if self._text_has_focus(str(ev.get("text", "")), focus_stems)]
+        focus_first = [
+            ev
+            for ev in evidences
+            if self._text_has_focus(str(ev.get("text", "")), focus_stems)
+        ]
         selected_pool = focus_first + [ev for ev in evidences if ev not in focus_first]
         if coverage_request:
             selected = self._diversify_by_doc(selected_pool, min(8, len(selected_pool)))
@@ -326,8 +633,18 @@ class ChatService:
         if not claims:
             return self.validator.minimal_not_found()
 
-        topic = focus_terms[0] if focus_terms else (normalize_text(question).split()[0] if normalize_text(question) else "tema")
-        synopsis = f"Sintese extraida diretamente das fontes recuperadas sobre '{topic}'."
+        topic = (
+            focus_terms[0]
+            if focus_terms
+            else (
+                normalize_text(question).split()[0]
+                if normalize_text(question)
+                else "tema"
+            )
+        )
+        synopsis = (
+            f"Sintese extraida diretamente das fontes recuperadas sobre '{topic}'."
+        )
         if llm_error:
             synopsis += " O modelo de geracao nao respondeu a tempo; resposta gerada no modo extrativo."
 
@@ -375,7 +692,11 @@ class ChatService:
                 if source_id:
                     used_source_ids.add(source_id)
 
-        used_docs = {str(evidence_by_source[sid]["doc_id"]) for sid in used_source_ids if sid in evidence_by_source}
+        used_docs = {
+            str(evidence_by_source[sid]["doc_id"])
+            for sid in used_source_ids
+            if sid in evidence_by_source
+        }
         focus_stems = self._focus_stems(focus_terms, question)
 
         target_doc_count = min(len(by_doc), 5)
@@ -427,7 +748,9 @@ class ChatService:
                 break
 
         # Dedupe sources after coverage extension.
-        balanced_claims = self._balance_claims_by_doc(validated.get("claims", []), max_per_doc=2, limit_total=8)
+        balanced_claims = self._balance_claims_by_doc(
+            validated.get("claims", []), max_per_doc=2, limit_total=8
+        )
         if balanced_claims:
             validated["claims"] = balanced_claims
 
@@ -447,7 +770,11 @@ class ChatService:
             unique_sources[source_id] = source
         validated["sources"] = sorted(
             unique_sources.values(),
-            key=lambda s: (str(s.get("file_name", "")), int(s.get("page_start", 0)), str(s.get("source_id", ""))),
+            key=lambda s: (
+                str(s.get("file_name", "")),
+                int(s.get("page_start", 0)),
+                str(s.get("source_id", "")),
+            ),
         )
 
         # Rebuild suggested_qa if it is concentrated in a single document.
@@ -483,13 +810,17 @@ class ChatService:
             return validated
         primary_stem = stems[0] if stems else ""
 
-        evidence_map = {str(ev.get("source_id")): ev for ev in evidences if ev.get("source_id")}
+        evidence_map = {
+            str(ev.get("source_id")): ev for ev in evidences if ev.get("source_id")
+        }
         kept_claims: list[dict[str, Any]] = []
         used_source_ids: set[str] = set()
 
         for claim in validated.get("claims", []):
             claim_text = normalize_text(str(claim.get("text", "")))
-            claim_has_focus = self._text_has_focus(claim_text, stems, require_primary=bool(primary_stem))
+            claim_has_focus = self._text_has_focus(
+                claim_text, stems, require_primary=bool(primary_stem)
+            )
             citations = claim.get("citations", [])
             if not isinstance(citations, list):
                 continue
@@ -514,13 +845,17 @@ class ChatService:
                     or len(quote_norm) < 28
                     or quote_raw.endswith("-")
                     or not quote_is_literal
-                    or not self._text_has_focus(quote_raw, stems, require_primary=bool(primary_stem))
+                    or not self._text_has_focus(
+                        quote_raw, stems, require_primary=bool(primary_stem)
+                    )
                 ):
                     quote_raw = self._best_quote_for_evidence(ev_text, stems)
                 if not quote_raw:
                     continue
 
-                if self._text_has_focus(quote_raw, stems, require_primary=bool(primary_stem)):
+                if self._text_has_focus(
+                    quote_raw, stems, require_primary=bool(primary_stem)
+                ):
                     citation_has_focus = True
 
                 normalized_citation = dict(citation)
@@ -529,7 +864,9 @@ class ChatService:
 
             if claim_has_focus or citation_has_focus:
                 if not claim_has_focus and normalized_citations:
-                    claim["text"] = self._claim_from_quote(str(normalized_citations[0].get("quote", "")), stems)
+                    claim["text"] = self._claim_from_quote(
+                        str(normalized_citations[0].get("quote", "")), stems
+                    )
                 claim["citations"] = normalized_citations
                 kept_claims.append(claim)
                 for citation in normalized_citations:
@@ -547,7 +884,11 @@ class ChatService:
             )
 
         validated["claims"] = self._dedupe_claims(kept_claims)[:8]
-        sources = [source for source in validated.get("sources", []) if source.get("source_id") in used_source_ids]
+        sources = [
+            source
+            for source in validated.get("sources", [])
+            if source.get("source_id") in used_source_ids
+        ]
         if not sources and used_source_ids:
             sources = []
             for source_id in sorted(used_source_ids):
@@ -567,7 +908,11 @@ class ChatService:
                 )
         validated["sources"] = sources
 
-        key_points = [str(item).strip() for item in validated.get("key_points", []) if str(item).strip()]
+        key_points = [
+            str(item).strip()
+            for item in validated.get("key_points", [])
+            if str(item).strip()
+        ]
         filtered_points = []
         for point in key_points:
             if self._text_has_focus(point, stems, require_primary=bool(primary_stem)):
@@ -582,7 +927,9 @@ class ChatService:
             ]
 
         synopsis = str(validated.get("synopsis", "")).strip()
-        if synopsis and not self._text_has_focus(synopsis, stems, require_primary=bool(primary_stem)):
+        if synopsis and not self._text_has_focus(
+            synopsis, stems, require_primary=bool(primary_stem)
+        ):
             validated["synopsis"] = (
                 f"Sintese focada em {focus_terms[0]} com base apenas nas citacoes recuperadas."
             )
@@ -594,7 +941,9 @@ class ChatService:
         if focus_terms:
             terms = focus_terms
         else:
-            terms = [token for token in normalize_text(question).split() if len(token) >= 4]
+            terms = [
+                token for token in normalize_text(question).split() if len(token) >= 4
+            ]
         for term in terms:
             token = normalize_text(str(term))
             if not token:
@@ -606,7 +955,9 @@ class ChatService:
         return stems[:4]
 
     @staticmethod
-    def _text_has_focus(text: str, stems: list[str], require_primary: bool = False) -> bool:
+    def _text_has_focus(
+        text: str, stems: list[str], require_primary: bool = False
+    ) -> bool:
         if not stems:
             return False
         normalized = normalize_text(text)
@@ -623,7 +974,11 @@ class ChatService:
         if not text:
             return []
         chunks = re.split(r"(?<=[.!?])\s+|\n+", text)
-        return [re.sub(r"\s+", " ", chunk).strip() for chunk in chunks if chunk and chunk.strip()]
+        return [
+            re.sub(r"\s+", " ", chunk).strip()
+            for chunk in chunks
+            if chunk and chunk.strip()
+        ]
 
     @staticmethod
     def _looks_like_header(sentence: str) -> bool:
@@ -641,7 +996,9 @@ class ChatService:
             return True
         return bool(re.fullmatch(r"[IVXLC0-9\-\s]+", clean))
 
-    def _best_quote_for_evidence(self, text: str, focus_stems: list[str], max_len: int = 320) -> str:
+    def _best_quote_for_evidence(
+        self, text: str, focus_stems: list[str], max_len: int = 320
+    ) -> str:
         cleaned = self._clean_evidence_text(text)
         sentences = self._split_sentences(cleaned)
         if focus_stems:
@@ -667,7 +1024,9 @@ class ChatService:
         return compact_text[:max_len] if compact_text else ""
 
     @staticmethod
-    def _claim_from_quote(quote: str, focus_stems: list[str], max_len: int = 220) -> str:
+    def _claim_from_quote(
+        quote: str, focus_stems: list[str], max_len: int = 220
+    ) -> str:
         compact = re.sub(r"\s+", " ", quote).strip()
         if not compact:
             return ""
@@ -714,7 +1073,9 @@ class ChatService:
         return deduped
 
     @staticmethod
-    def _diversify_by_doc(candidates: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    def _diversify_by_doc(
+        candidates: list[dict[str, Any]], limit: int
+    ) -> list[dict[str, Any]]:
         if not candidates or limit <= 0:
             return []
         by_doc: dict[str, list[dict[str, Any]]] = {}

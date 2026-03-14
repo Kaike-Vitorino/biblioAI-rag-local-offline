@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import logging
@@ -100,6 +100,12 @@ def run_command(
     env: dict[str, str] | None = None,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
+    def _sanitize_log_line(text: str) -> str:
+        ansi_stripped = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+        return ansi_stripped.encode("cp1252", errors="replace").decode(
+            "cp1252", errors="replace"
+        )
+
     logging.info("Executando comando: %s (cwd=%s)", cmd, cwd or ROOT_DIR)
     proc = subprocess.run(
         cmd,
@@ -114,7 +120,7 @@ def run_command(
     )
     if proc.stdout:
         for line in proc.stdout.splitlines():
-            logging.info("CMD> %s", line)
+            logging.info("CMD> %s", _sanitize_log_line(line))
     if check and proc.returncode != 0:
         raise RuntimeError(f"Comando falhou ({proc.returncode}): {' '.join(cmd)}")
     return proc
@@ -133,7 +139,9 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def wait_for_http_json(url: str, timeout_seconds: int = 60, expect_key: str | None = None) -> dict[str, Any] | None:
+def wait_for_http_json(
+    url: str, timeout_seconds: int = 60, expect_key: str | None = None
+) -> dict[str, Any] | None:
     started = time.time()
     while time.time() - started <= timeout_seconds:
         try:
@@ -147,7 +155,9 @@ def wait_for_http_json(url: str, timeout_seconds: int = 60, expect_key: str | No
     return None
 
 
-def http_post_json(url: str, payload: dict[str, Any], timeout: int = 30) -> dict[str, Any]:
+def http_post_json(
+    url: str, payload: dict[str, Any], timeout: int = 30
+) -> dict[str, Any]:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         url=url,
@@ -165,7 +175,11 @@ def normalize_text(text: str) -> str:
     lowered = (text or "").strip().lower()
     if not lowered:
         return ""
-    no_accents = "".join(ch for ch in unicodedata.normalize("NFD", lowered) if unicodedata.category(ch) != "Mn")
+    no_accents = "".join(
+        ch
+        for ch in unicodedata.normalize("NFD", lowered)
+        if unicodedata.category(ch) != "Mn"
+    )
     no_punct = re.sub(r"[^\w\s]", " ", no_accents)
     return re.sub(r"\s+", " ", no_punct).strip()
 
@@ -237,10 +251,16 @@ def resolve_node_paths() -> tuple[str | None, str | None]:
     if node_path and npm_path:
         return node_path, npm_path
 
-    candidate_node = Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "nodejs" / "node.exe"
+    candidate_node = (
+        Path(os.environ.get("ProgramFiles", "C:\\Program Files"))
+        / "nodejs"
+        / "node.exe"
+    )
     candidate_npm = candidate_node.with_name("npm.cmd")
     if candidate_node.exists():
-        return str(candidate_node), str(candidate_npm) if candidate_npm.exists() else npm_path
+        return str(candidate_node), str(
+            candidate_npm
+        ) if candidate_npm.exists() else npm_path
     return node_path, npm_path
 
 
@@ -250,7 +270,9 @@ def resolve_ollama_path() -> str | None:
         return ollama_path
     candidates = [
         Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama.exe",
-        Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "Ollama" / "ollama.exe",
+        Path(os.environ.get("ProgramFiles", "C:\\Program Files"))
+        / "Ollama"
+        / "ollama.exe",
     ]
     for candidate in candidates:
         if candidate.exists():
@@ -298,7 +320,9 @@ def install_node_assisted() -> None:
             download_file(url, installer)
             subprocess.run(["msiexec", "/i", str(installer)], check=False)
         except Exception as exc:
-            status_warn(f"Nao foi possivel baixar/rodar automaticamente o Node ({exc}).")
+            status_warn(
+                f"Nao foi possivel baixar/rodar automaticamente o Node ({exc})."
+            )
             webbrowser.open(NODE_DOWNLOAD_PAGE)
             raise RuntimeError("Instale o Node.js e clique novamente no launcher.")
 
@@ -317,7 +341,9 @@ def install_ollama_assisted() -> None:
             download_file(OLLAMA_INSTALLER_URL, installer)
             subprocess.run([str(installer)], check=False)
         except Exception as exc:
-            status_warn(f"Nao foi possivel baixar/rodar automaticamente o Ollama ({exc}).")
+            status_warn(
+                f"Nao foi possivel baixar/rodar automaticamente o Ollama ({exc})."
+            )
             webbrowser.open(OLLAMA_DOWNLOAD_PAGE)
             raise RuntimeError("Instale o Ollama e clique novamente no launcher.")
 
@@ -339,7 +365,9 @@ def ensure_node_installed() -> tuple[str, str]:
     if node_path and npm_path:
         status_ok("Node.js instalado")
         restart_launcher()
-    raise RuntimeError("Node.js ainda nao esta disponivel. Feche e clique novamente no launcher.")
+    raise RuntimeError(
+        "Node.js ainda nao esta disponivel. Feche e clique novamente no launcher."
+    )
 
 
 def ensure_ollama_installed() -> str:
@@ -354,12 +382,16 @@ def ensure_ollama_installed() -> str:
     if ollama_path:
         status_ok("Ollama instalado")
         restart_launcher()
-    raise RuntimeError("Ollama ainda nao esta disponivel. Feche e clique novamente no launcher.")
+    raise RuntimeError(
+        "Ollama ainda nao esta disponivel. Feche e clique novamente no launcher."
+    )
 
 
 def ensure_ollama_running(ollama_path: str) -> None:
     status("Verificando servico do Ollama...")
-    version = wait_for_http_json(f"{OLLAMA_URL}/api/version", timeout_seconds=3, expect_key="version")
+    version = wait_for_http_json(
+        f"{OLLAMA_URL}/api/version", timeout_seconds=3, expect_key="version"
+    )
     if version:
         status_ok("Ollama ja esta rodando")
         return
@@ -379,7 +411,9 @@ def ensure_ollama_running(ollama_path: str) -> None:
             creationflags=creationflags,
         )
 
-    version = wait_for_http_json(f"{OLLAMA_URL}/api/version", timeout_seconds=45, expect_key="version")
+    version = wait_for_http_json(
+        f"{OLLAMA_URL}/api/version", timeout_seconds=45, expect_key="version"
+    )
     if not version:
         raise RuntimeError("Nao foi possivel iniciar o Ollama automaticamente.")
     status_ok("Ollama iniciado")
@@ -450,7 +484,11 @@ def install_backend_dependencies(python_exe: Path) -> None:
         raise RuntimeError("Arquivo requirements.txt nao encontrado.")
     current_hash = sha256_file(requirements_file)
     BACKEND_DEPS_MARKER.parent.mkdir(parents=True, exist_ok=True)
-    previous_hash = BACKEND_DEPS_MARKER.read_text(encoding="utf-8").strip() if BACKEND_DEPS_MARKER.exists() else ""
+    previous_hash = (
+        BACKEND_DEPS_MARKER.read_text(encoding="utf-8").strip()
+        if BACKEND_DEPS_MARKER.exists()
+        else ""
+    )
     if previous_hash == current_hash:
         probe = run_command(
             [str(python_exe), "-c", "import fastapi, uvicorn"],
@@ -461,9 +499,14 @@ def install_backend_dependencies(python_exe: Path) -> None:
             return
 
     status("Instalando dependencias do backend...")
-    run_command([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"], check=True)
+    run_command(
+        [str(python_exe), "-m", "pip", "install", "--upgrade", "pip"], check=True
+    )
     try:
-        run_command([str(python_exe), "-m", "pip", "install", "-r", "requirements.txt"], check=True)
+        run_command(
+            [str(python_exe), "-m", "pip", "install", "-r", "requirements.txt"],
+            check=True,
+        )
     except Exception as exc:
         raise RuntimeError(
             "Nao foi possivel instalar as dependencias do backend.\n"
@@ -506,7 +549,11 @@ def ensure_frontend_built(npm_path: str, env: dict[str, str]) -> None:
         raise RuntimeError("package.json do frontend nao encontrado.")
     current_hash = sha256_file(fingerprint_file)
     FRONTEND_DEPS_MARKER.parent.mkdir(parents=True, exist_ok=True)
-    previous_hash = FRONTEND_DEPS_MARKER.read_text(encoding="utf-8").strip() if FRONTEND_DEPS_MARKER.exists() else ""
+    previous_hash = (
+        FRONTEND_DEPS_MARKER.read_text(encoding="utf-8").strip()
+        if FRONTEND_DEPS_MARKER.exists()
+        else ""
+    )
 
     node_modules = FRONTEND_DIR / "node_modules"
     if not node_modules.exists() or previous_hash != current_hash:
@@ -548,7 +595,9 @@ def get_backend_listener_pid() -> int | None:
         return None
     if result.returncode != 0:
         return None
-    pattern = re.compile(rf"^\s*TCP\s+\S+:{BACKEND_PORT}\s+\S+\s+LISTENING\s+(\d+)\s*$", re.IGNORECASE)
+    pattern = re.compile(
+        rf"^\s*TCP\s+\S+:{BACKEND_PORT}\s+\S+\s+LISTENING\s+(\d+)\s*$", re.IGNORECASE
+    )
     for line in result.stdout.splitlines():
         match = pattern.match(line)
         if match:
@@ -563,13 +612,20 @@ def stop_process(pid: int) -> None:
     if pid <= 0:
         return
     status(f"Encerrando processo antigo do backend (PID {pid})...")
-    subprocess.run(["taskkill", "/PID", str(pid), "/F"], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    subprocess.run(
+        ["taskkill", "/PID", str(pid), "/F"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
 
 
 def wait_backend_down(timeout_seconds: int = 20) -> None:
     started = time.time()
     while time.time() - started <= timeout_seconds:
-        health = wait_for_http_json(f"{BACKEND_BASE_URL}/health", timeout_seconds=1, expect_key="status")
+        health = wait_for_http_json(
+            f"{BACKEND_BASE_URL}/health", timeout_seconds=1, expect_key="status"
+        )
         if not health:
             return
         time.sleep(1)
@@ -578,14 +634,18 @@ def wait_backend_down(timeout_seconds: int = 20) -> None:
 def ensure_backend_running(python_exe: Path, env: dict[str, str]) -> None:
     status("Verificando backend...")
     desired_build_hash = compute_backend_build_hash()
-    health = wait_for_http_json(f"{BACKEND_BASE_URL}/health", timeout_seconds=2, expect_key="status")
+    health = wait_for_http_json(
+        f"{BACKEND_BASE_URL}/health", timeout_seconds=2, expect_key="status"
+    )
     if health and health.get("status") == "ok":
         running_hash = str(health.get("build_hash", "") or "")
         running_pid = int(health.get("pid", 0) or 0)
         if running_hash == desired_build_hash:
             status_ok("Backend ja esta rodando e atualizado")
             return
-        status_warn("Backend em execucao desatualizado. Reiniciando para aplicar correcoes...")
+        status_warn(
+            "Backend em execucao desatualizado. Reiniciando para aplicar correcoes..."
+        )
         if running_pid > 0:
             stop_process(running_pid)
         else:
@@ -622,7 +682,9 @@ def ensure_backend_running(python_exe: Path, env: dict[str, str]) -> None:
             creationflags=creationflags,
         )
 
-    health = wait_for_http_json(f"{BACKEND_BASE_URL}/health", timeout_seconds=60, expect_key="status")
+    health = wait_for_http_json(
+        f"{BACKEND_BASE_URL}/health", timeout_seconds=60, expect_key="status"
+    )
     if not health or health.get("status") != "ok":
         raise RuntimeError("Backend nao ficou saudavel no tempo esperado.")
     running_hash = str(health.get("build_hash", "") or "")
@@ -630,7 +692,15 @@ def ensure_backend_running(python_exe: Path, env: dict[str, str]) -> None:
         raise RuntimeError("Backend iniciou, mas sem a versao esperada do codigo.")
     BACKEND_RUNTIME_MARKER.parent.mkdir(parents=True, exist_ok=True)
     BACKEND_RUNTIME_MARKER.write_text(
-        json.dumps({"pid": proc.pid, "build_hash": desired_build_hash, "started_at": time.strftime("%Y-%m-%d %H:%M:%S")}, ensure_ascii=False, indent=2),
+        json.dumps(
+            {
+                "pid": proc.pid,
+                "build_hash": desired_build_hash,
+                "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
     status_ok("Backend iniciado")
@@ -667,7 +737,9 @@ def collect_docs_state() -> dict[str, dict[str, Any]]:
 def should_run_ingest() -> bool:
     current = collect_docs_state()
     if not current:
-        status_warn("Nenhum arquivo suportado em /docs (.pdf, .txt, .md). A UI sera aberta mesmo assim.")
+        status_warn(
+            "Nenhum arquivo suportado em /docs (.pdf, .txt, .md). A UI sera aberta mesmo assim."
+        )
         return False
     old = load_ingest_state().get("files", {})
     if old != current:
@@ -682,13 +754,17 @@ def save_ingest_state(job_id: str | None = None) -> None:
         "last_job_id": job_id,
         "files": collect_docs_state(),
     }
-    INGEST_STATE_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    INGEST_STATE_FILE.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def run_auto_ingest_if_needed() -> None:
     if not should_run_ingest():
         return
-    status("Arquivos novos/alterados detectados em /docs. Iniciando ingestao automatica...")
+    status(
+        "Arquivos novos/alterados detectados em /docs. Iniciando ingestao automatica..."
+    )
     payload = {"docs_path": "docs"}
     ingest_start = http_post_json(f"{BACKEND_BASE_URL}/ingest", payload, timeout=20)
     job_id = ingest_start.get("job_id")
@@ -700,7 +776,9 @@ def run_auto_ingest_if_needed() -> None:
     last_line = ""
     while time.time() - started <= 60 * 60:
         query = urllib.parse.urlencode({"job_id": job_id})
-        with urllib.request.urlopen(f"{BACKEND_BASE_URL}/ingest/status?{query}", timeout=20) as response:
+        with urllib.request.urlopen(
+            f"{BACKEND_BASE_URL}/ingest/status?{query}", timeout=20
+        ) as response:
             state = json.loads(response.read().decode("utf-8", errors="replace"))
         progress = state.get("progress", {})
         status_line = (
@@ -717,15 +795,25 @@ def run_auto_ingest_if_needed() -> None:
         status_value = str(state.get("status", "")).lower()
         if status_value in {"completed", "completed_with_errors"}:
             save_ingest_state(job_id)
-            if int(progress.get("chunks_done", 0) or 0) == 0 and int(progress.get("updated", 0) or 0) == 0:
-                status_ok("Ingestao finalizada sem novos chunks (arquivos ja indexados)")
+            if (
+                int(progress.get("chunks_done", 0) or 0) == 0
+                and int(progress.get("updated", 0) or 0) == 0
+            ):
+                status_ok(
+                    "Ingestao finalizada sem novos chunks (arquivos ja indexados)"
+                )
             else:
                 status_ok("Ingestao finalizada")
             return
         if status_value in {"failed"}:
             errors = [str(item) for item in state.get("errors", [])]
-            if any("another ingestion job is already running" in item.lower() for item in errors):
-                status_warn("Ja existe uma ingestao em andamento. Aguardando terminar...")
+            if any(
+                "another ingestion job is already running" in item.lower()
+                for item in errors
+            ):
+                status_warn(
+                    "Ja existe uma ingestao em andamento. Aguardando terminar..."
+                )
                 _wait_existing_ingest_completion()
                 save_ingest_state(job_id)
                 status_ok("Ingestao existente finalizada e estado atualizado")
@@ -740,7 +828,9 @@ def _wait_existing_ingest_completion(timeout_seconds: int = 60 * 60) -> None:
     started = time.time()
     last_line = ""
     while time.time() - started <= timeout_seconds:
-        with urllib.request.urlopen(f"{BACKEND_BASE_URL}/ingest/status", timeout=20) as response:
+        with urllib.request.urlopen(
+            f"{BACKEND_BASE_URL}/ingest/status", timeout=20
+        ) as response:
             state = json.loads(response.read().decode("utf-8", errors="replace"))
         progress = state.get("progress", {})
         status_line = (
@@ -771,7 +861,9 @@ def run_ingest_force() -> None:
     started = time.time()
     while time.time() - started <= 60 * 60:
         query = urllib.parse.urlencode({"job_id": job_id})
-        with urllib.request.urlopen(f"{BACKEND_BASE_URL}/ingest/status?{query}", timeout=20) as response:
+        with urllib.request.urlopen(
+            f"{BACKEND_BASE_URL}/ingest/status?{query}", timeout=20
+        ) as response:
             state = json.loads(response.read().decode("utf-8", errors="replace"))
         status_value = str(state.get("status", "")).lower()
         if status_value in {"completed", "completed_with_errors"}:
@@ -818,7 +910,9 @@ def extract_focus_tokens(query: str) -> list[str]:
         "e",
     }
     normalized = normalize_text(query)
-    tokens = [tok for tok in normalized.split() if len(tok) >= 4 and tok not in stopwords]
+    tokens = [
+        tok for tok in normalized.split() if len(tok) >= 4 and tok not in stopwords
+    ]
     unique: list[str] = []
     seen = set()
     for tok in tokens:
@@ -859,28 +953,50 @@ def response_is_semantically_relevant(response: dict[str, Any], query: str) -> b
 
     if not citation_texts:
         return False
-    quote_hits = sum(1 for quote in citation_texts if any(stem in quote for stem in stems))
+    quote_hits = sum(
+        1 for quote in citation_texts if any(stem in quote for stem in stems)
+    )
     quote_ratio = quote_hits / max(1, len(citation_texts))
-    claim_hits = sum(1 for claim_text in claim_texts if any(stem in claim_text for stem in stems))
-    return quote_hits >= 1 and quote_ratio >= 0.6 and (claim_hits >= 1 or len(claim_texts) <= 1)
+    claim_hits = sum(
+        1 for claim_text in claim_texts if any(stem in claim_text for stem in stems)
+    )
+    return (
+        quote_hits >= 1
+        and quote_ratio >= 0.6
+        and (claim_hits >= 1 or len(claim_texts) <= 1)
+    )
 
 
 def ensure_smoke_query_returns_result() -> None:
     env_values = read_env_lines(ENV_FILE)
-    enabled = env_values.get("SMOKE_TEST_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+    enabled = env_values.get("SMOKE_TEST_ENABLED", "1").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     if not enabled:
         status_ok("Smoke test desativado por configuracao")
         return
-    query = env_values.get("SMOKE_TEST_QUERY", DEFAULT_SMOKE_QUERY).strip() or DEFAULT_SMOKE_QUERY
+    query = (
+        env_values.get("SMOKE_TEST_QUERY", DEFAULT_SMOKE_QUERY).strip()
+        or DEFAULT_SMOKE_QUERY
+    )
     status(f"Executando smoke test de chat: {query}")
     try:
         response = run_chat_smoke_test(query)
         if response_is_semantically_relevant(response, query):
-            status_ok("Smoke test passou: chat retornou resposta relevante com citacoes")
+            status_ok(
+                "Smoke test passou: chat retornou resposta relevante com citacoes"
+            )
             return
-        status_warn("Smoke test retornou resposta fraca ou pouco relevante. Tentando correcao com ingestao forçada...")
+        status_warn(
+            "Smoke test retornou resposta fraca ou pouco relevante. Tentando correcao com ingestao forçada..."
+        )
     except Exception as exc:
-        status_warn(f"Smoke test inicial falhou ({exc}). Tentando correcao com ingestao forçada...")
+        status_warn(
+            f"Smoke test inicial falhou ({exc}). Tentando correcao com ingestao forçada..."
+        )
 
     run_ingest_force()
     response = run_chat_smoke_test(query)
@@ -891,7 +1007,9 @@ def ensure_smoke_query_returns_result() -> None:
     status_ok("Smoke test passou apos ingestao de manutencao")
 
 
-def build_runtime_env(node_path: str, npm_path: str, ollama_path: str) -> dict[str, str]:
+def build_runtime_env(
+    node_path: str, npm_path: str, ollama_path: str
+) -> dict[str, str]:
     env = os.environ.copy()
     # Ensure common install folders are visible even if shell PATH is stale.
     extra_dirs = {
@@ -986,4 +1104,3 @@ if __name__ == "__main__":
         except Exception:
             pass
         sys.exit(1)
-

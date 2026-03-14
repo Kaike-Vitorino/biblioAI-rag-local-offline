@@ -82,6 +82,56 @@ export async function postChatMessage(chatId: string, question: string): Promise
   });
 }
 
+export async function* postChatMessageStream(
+  chatId: string,
+  question: string
+): AsyncGenerator<{ type: string; content?: string; response?: ChatResponse; message?: string }, void, unknown> {
+  const url = `${API_BASE_URL}/chats/${encodeURIComponent(chatId)}/messages?stream=true`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ question }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`HTTP ${response.status} - ${text || response.statusText}`);
+  }
+
+  if (!response.body) {
+    throw new Error("No response body");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || ""; // Keep incomplete line in buffer
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const data = JSON.parse(line);
+          yield data;
+        } catch (e) {
+          console.warn("Failed to parse stream line:", line);
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 export async function getDocs(): Promise<DocsResponse> {
   return http<DocsResponse>("/docs");
 }

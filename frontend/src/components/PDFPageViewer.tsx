@@ -16,6 +16,8 @@ type PDFPageViewerProps = {
   matchIndex: number;
   onPageCount?: (pageCount: number) => void;
   onMatchCount?: (matchCount: number) => void;
+  zoom?: number;
+  fitWidth?: boolean;
 };
 
 function normalizeForMatch(text: string): string {
@@ -29,7 +31,12 @@ function normalizeForMatch(text: string): string {
 }
 
 function findSnippetMatches(spans: HTMLSpanElement[], snippet: string): number[][] {
-  const normalizedSnippet = normalizeForMatch(snippet);
+  const normalizedSnippetFull = normalizeForMatch(snippet);
+  const normalizedSnippet = normalizedSnippetFull
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 14)
+    .join(" ");
   if (!normalizedSnippet) return [];
   const matches: number[][] = [];
   const seen = new Set<string>();
@@ -50,10 +57,11 @@ function findSnippetMatches(spans: HTMLSpanElement[], snippet: string): number[]
         }
         break;
       }
-      if (combined.length > Math.max(120, normalizedSnippet.length * 2.3)) break;
+      if (combined.length > Math.max(120, normalizedSnippet.length * 2.2)) break;
     }
   }
-  return matches;
+  matches.sort((a, b) => a.length - b.length);
+  return matches.slice(0, 8);
 }
 
 export default function PDFPageViewer({
@@ -62,14 +70,19 @@ export default function PDFPageViewer({
   snippet,
   matchIndex,
   onPageCount,
-  onMatchCount
+  onMatchCount,
+  zoom = 1.35,
+  fitWidth = false
 }: PDFPageViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const textLayerRef = useRef<HTMLDivElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
   const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(pageNumber);
+  const [transitionClass, setTransitionClass] = useState("");
+  const prevPageRef = useRef(pageNumber);
 
   const boundedPage = useMemo(() => {
     if (!pdfDoc) return Math.max(1, pageNumber);
@@ -115,7 +128,18 @@ export default function PDFPageViewer({
       if (!canvas || !textLayer) return;
       const page = await doc.getPage(boundedPage);
       if (cancelled) return;
-      const viewport = page.getViewport({ scale: 1.35 });
+      const direction = boundedPage >= prevPageRef.current ? "next" : "prev";
+      setTransitionClass(direction === "next" ? "page-transition-next" : "page-transition-prev");
+      const baseViewport = page.getViewport({ scale: 1 });
+      let renderScale = zoom;
+      if (fitWidth) {
+        const stage = stageRef.current;
+        const availableWidth = Math.max(200, (stage?.clientWidth ?? 0) - 24);
+        if (availableWidth > 0 && baseViewport.width > 0) {
+          renderScale = Math.max(0.55, Math.min(3.0, availableWidth / baseViewport.width));
+        }
+      }
+      const viewport = page.getViewport({ scale: renderScale });
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
 
@@ -173,6 +197,10 @@ export default function PDFPageViewer({
       }
       const anchor = spans[active[0]];
       anchor?.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+      prevPageRef.current = boundedPage;
+      window.setTimeout(() => {
+        if (!cancelled) setTransitionClass("");
+      }, 220);
     }
     renderPage().catch((error) => {
       setLoadError(error instanceof Error ? error.message : "Falha na renderizacao da pagina.");
@@ -180,7 +208,7 @@ export default function PDFPageViewer({
     return () => {
       cancelled = true;
     };
-  }, [pdfDoc, boundedPage, snippet, matchIndex, onMatchCount]);
+  }, [pdfDoc, boundedPage, snippet, matchIndex, onMatchCount, zoom, fitWidth]);
 
   useEffect(() => {
     setCurrentPage(boundedPage);
@@ -193,9 +221,11 @@ export default function PDFPageViewer({
         {!loading && pdfDoc && <span>Pagina {currentPage} de {pdfDoc.numPages}</span>}
         {loadError && <span className="error-text">{loadError}</span>}
       </div>
-      <div className="pdf-stage">
-        <canvas ref={canvasRef} />
-        <div ref={textLayerRef} className="pdf-text-layer" />
+      <div ref={stageRef} className={`pdf-stage ${transitionClass}`}>
+        <div className="pdf-page-surface">
+          <canvas ref={canvasRef} />
+          <div ref={textLayerRef} className="pdf-text-layer" />
+        </div>
       </div>
     </div>
   );

@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any
+from typing import Any, Generator
 
 import requests
+from fastapi.responses import StreamingResponse
 
 from app.config import Settings
 
@@ -43,6 +44,12 @@ JSON_SCHEMA_HINT = {
             "citations": [{"source_id": "string", "quote": "string"}],
         }
     ],
+}
+
+
+EVIDENCE_VALIDATION_SCHEMA_HINT = {
+    "keep_source_ids": ["string"],
+    "discarded": [{"source_id": "string", "reason": "string"}],
 }
 
 
@@ -85,9 +92,155 @@ class LLMService:
         raw = response.json().get("response", "")
         parsed = self._parse_json(raw)
         if parsed is None:
-            logger.warning("LLM returned non-JSON response. Returning fallback not_found.")
+            logger.warning(
+                "LLM returned non-JSON response. Returning fallback not_found."
+            )
             return {"not_found": True}
         return parsed
+
+    def generate_stream(
+        self,
+        question: str,
+        evidences: list[dict[str, Any]],
+        focus_terms: list[str] | None = None,
+        coverage_request: bool = False,
+        retry_mode: bool = False,
+    ) -> Generator[str, None, None]:
+        prompt = self._build_user_prompt(
+            question,
+            evidences,
+            focus_terms=focus_terms or [],
+            coverage_request=coverage_request,
+            retry_mode=retry_mode,
+        )
+        payload = {
+            "model": self.settings.model,
+            "system": SYSTEM_PROMPT,
+            "prompt": prompt,
+            "stream": True,
+            "format": "json",
+            "options": {
+                "temperature": self.settings.temperature,
+                "num_ctx": self.settings.num_ctx,
+            },
+        }
+        try:
+            with requests.post(
+                f"{self.settings.ollama_base_url}/api/generate",
+                json=payload,
+                stream=True,
+                timeout=120,
+            ) as r:
+                r.raise_for_status()
+                for line in r.iter_lines():
+                    if line:
+                        try:
+                            data = json.loads(line)
+                            if "response" in data:
+                                yield data["response"]
+                        except json.JSONDecodeError:
+                            continue
+        except Exception as e:
+            logger.error(f"Streaming error: {e}")
+            raise
+
+    def validate_evidence_relevance(
+        self,
+        question: str,
+        evidences: list[dict[str, Any]],
+        focus_terms: list[str] | None = None,
+        max_keep: int = 8,
+    ) -> list[str]:
+        if not evidences:
+            return []
+        compact_evidences: list[dict[str, Any]] = []
+        for ev in evidences:
+            compact_evidences.append(
+                {
+                    "source_id": ev.get("source_id"),
+                    "file_name": ev.get("file_name"),
+                    "page_start": ev.get("page_start"),
+                    "page_end": ev.get("page_end"),
+                    "text": str(ev.get("text", ""))[:900],
+                }
+            )
+
+        focus_text = (
+            ", ".join(focus_terms or []) if focus_terms else "(sem termos focais)"
+        )
+        prompt = (
+            "Voce e um verificador de evidencias para RAG.\n"
+            "Retorne APENAS JSON valido no schema fornecido.\n"
+            "Mantenha somente evidencias que respondem DIRETAMENTE a pergunta.\n"
+            "Remova evidencias vagas, fora de contexto, ou com aderencia fraca.\n"
+            "Se houver multiplos termos focais, prefira evidencias que cubram todos.\n"
+            f"Pergunta: {question}\n"
+            f"Termos focais: {focus_text}\n"
+            f"Maximo de evidencias para manter: {max_keep}\n"
+            f"Schema: {json.dumps(EVIDENCE_VALIDATION_SCHEMA_HINT, ensure_ascii=False)}\n"
+            f"Evidencias candidatas: {json.dumps(compact_evidences, ensure_ascii=False)}"
+        )
+
+        payload = {
+            "model": self.settings.model,
+            "system": "Valide relevancia de evidencias com rigor e retorne apenas JSON.",
+            "prompt": prompt,
+            "stream": False,
+            "format": "json",
+            "options": {
+                "temperature": 0.0,
+                "num_ctx": self.settings.num_ctx,
+            },
+        }
+
+        try:
+            response = requests.post(
+                f"{self.settings.ollama_base_url}/api/generate",
+                json=payload,
+                timeout=120,
+            )
+            response.raise_for_status()
+            raw = response.json().get("response", "")
+            parsed = self._parse_json(raw)
+            if not parsed:
+                return [
+                    str(ev.get("source_id", ""))
+                    for ev in evidences
+                    if ev.get("source_id")
+                ]
+
+            keep_source_ids = parsed.get("keep_source_ids", [])
+            if not isinstance(keep_source_ids, list):
+                return [
+                    str(ev.get("source_id", ""))
+                    for ev in evidences
+                    if ev.get("source_id")
+                ]
+
+            allowed = {
+                str(ev.get("source_id", ""))
+                for ev in evidences
+                if str(ev.get("source_id", "")).strip()
+            }
+            filtered = [
+                sid
+                for sid in [str(s).strip() for s in keep_source_ids]
+                if sid in allowed
+            ]
+            if not filtered:
+                return [
+                    str(ev.get("source_id", ""))
+                    for ev in evidences
+                    if ev.get("source_id")
+                ]
+            return filtered[:max_keep]
+        except Exception as exc:
+            logger.warning(
+                "Evidence validation failed. Using original evidences. Error: %s", exc
+            )
+            return [
+                str(ev.get("source_id", "")) for ev in evidences if ev.get("source_id")
+            ]
 
     def _build_user_prompt(
         self,
