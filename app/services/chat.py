@@ -562,11 +562,11 @@ class ChatService:
         question_norm = normalize_text(exclude_latest_user_question or "")
 
         for row in rows:
-            role = str(row.get("role", "")).strip().lower()
+            role = str(row["role"] or "").strip().lower()
             if role not in {"user", "assistant"}:
                 continue
             try:
-                payload = json.loads(str(row.get("content_json", "{}")))
+                payload = json.loads(str(row["content_json"] or "{}"))
             except json.JSONDecodeError:
                 continue
             if not isinstance(payload, dict):
