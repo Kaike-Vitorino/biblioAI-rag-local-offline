@@ -209,10 +209,14 @@ button {
   background: transparent;
   color: var(--text-primary);
   padding: 8px 12px;
+  height: 42px;
   text-align: center;
   cursor: pointer;
   font-weight: 500;
-  font-size: 0.85rem;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .sidebar-action:hover:not(:disabled) {
@@ -239,18 +243,23 @@ button {
   border-radius: 8px;
   overflow: hidden;
   background: var(--bg-card);
+  height: 44px;
 }
 
 .mode-toggle button {
   flex: 1;
   border: none;
   background: transparent;
-  padding: 8px;
-  font-size: 0.85rem;
-  font-weight: 500;
+  padding: 12px 16px;
+  height: 42px;
+  font-size: 0.95rem;
+  font-weight: 700;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .mode-toggle button:hover {
@@ -1416,10 +1425,16 @@ blockquote {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 12px;
   border: 1px solid var(--border-glass);
-  border-radius: 8px;
-  padding: 6px 8px;
+  border-radius: 10px;
+  padding: 8px 12px;
+  transition: all 0.2s ease;
+}
+
+.docs-hub-item:hover {
+  background: var(--bg-glass-hover);
+  border-color: var(--border-focus);
 }
 
 .docs-hub-toggle {
@@ -1439,8 +1454,16 @@ blockquote {
 .docs-hub-delete {
   border: 1px solid var(--border-glass);
   background: transparent;
+  color: var(--text-secondary);
   border-radius: 6px;
-  font-size: 0.75rem;
-  padding: 4px 8px;
+  font-size: 0.7rem;
+  padding: 4px 10px;
   cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.docs-hub-delete:hover {
+  background: rgba(201, 75, 75, 0.1);
+  color: #c94b4b;
+  border-color: rgba(201, 75, 75, 0.2);
 }
