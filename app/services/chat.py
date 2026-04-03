@@ -14,6 +14,26 @@ from app.services.validation import ResponseValidator
 
 logger = logging.getLogger(__name__)
 
+GENERATIVE_REQUEST_HINTS = (
+    "monte",
+    "montar",
+    "crie",
+    "criar",
+    "gere",
+    "gerar",
+    "faca",
+    "fazer",
+    "elabore",
+    "elaborar",
+    "escreva",
+    "escrever",
+    "questionario",
+    "perguntas",
+    "respostas",
+    "roteiro",
+    "lista",
+)
+
 
 class ChatService:
     def __init__(
@@ -60,6 +80,8 @@ class ChatService:
             evidences=evidences,
             focus_terms=focus_terms,
         )
+        llm_evidences = evidences[:4]
+        llm_evidences_retry = evidences[:2]
 
         if not evidences:
             all_references = self._apply_final_reference_validation(
@@ -84,24 +106,42 @@ class ChatService:
         try:
             llm_response = self.llm_service.generate_answer(
                 question,
-                evidences,
+                llm_evidences,
                 focus_terms=focus_terms,
                 coverage_request=coverage_request,
                 conversation_history=conversation_history,
             )
-            validated = self.validator.validate(llm_response, evidences)
+            validated = self.validator.validate(llm_response, llm_evidences)
             if validated.get("not_found") and self._should_retry_not_found(retrieval):
                 llm_retry = self.llm_service.generate_answer(
                     question,
-                    evidences,
+                    llm_evidences,
                     focus_terms=focus_terms,
                     coverage_request=coverage_request,
                     retry_mode=True,
                     conversation_history=conversation_history,
                 )
-                validated_retry = self.validator.validate(llm_retry, evidences)
+                validated_retry = self.validator.validate(llm_retry, llm_evidences)
                 if not validated_retry.get("not_found"):
                     validated = validated_retry
+            if (
+                validated.get("not_found")
+                and self._is_generative_request(question)
+                and llm_evidences_retry
+            ):
+                llm_retry_compact = self.llm_service.generate_answer(
+                    question,
+                    llm_evidences_retry,
+                    focus_terms=focus_terms,
+                    coverage_request=coverage_request,
+                    retry_mode=True,
+                    conversation_history=conversation_history,
+                )
+                validated_retry_compact = self.validator.validate(
+                    llm_retry_compact, llm_evidences_retry
+                )
+                if not validated_retry_compact.get("not_found"):
+                    validated = validated_retry_compact
         except Exception as exc:
             llm_error = str(exc)
             logger.warning(
@@ -195,6 +235,7 @@ class ChatService:
             evidences=evidences,
             focus_terms=focus_terms,
         )
+        llm_evidences = evidences[:4]
 
         if not evidences:
             all_references = self._apply_final_reference_validation(
@@ -227,7 +268,7 @@ class ChatService:
         try:
             for chunk in self.llm_service.generate_stream(
                 question,
-                evidences,
+                llm_evidences,
                 focus_terms=focus_terms,
                 coverage_request=coverage_request,
                 conversation_history=conversation_history,
@@ -250,7 +291,7 @@ class ChatService:
             llm_error: str | None = None
 
             if parsed:
-                validated = self.validator.validate(parsed, evidences)
+                validated = self.validator.validate(parsed, llm_evidences)
             else:
                 llm_error = "Failed to parse LLM response"
                 validated = self.validator.minimal_not_found()
@@ -608,6 +649,18 @@ class ChatService:
             "essa",
             "essas",
             "esses",
+            "ele",
+            "ela",
+            "eles",
+            "elas",
+            "dele",
+            "dela",
+            "deles",
+            "delas",
+            "nele",
+            "nela",
+            "neles",
+            "nelas",
             "anterior",
             "antes",
             "acima",
@@ -626,7 +679,6 @@ class ChatService:
             return current_question
 
         previous_user = ""
-        previous_assistant = ""
         for turn in reversed(conversation_history):
             role = str(turn.get("role", ""))
             content = str(turn.get("content", "")).strip()
@@ -634,16 +686,12 @@ class ChatService:
                 continue
             if role == "user" and not previous_user:
                 previous_user = content
-            if role == "assistant" and not previous_assistant:
-                previous_assistant = content
-            if previous_user and previous_assistant:
+            if previous_user:
                 break
 
         context_parts = []
         if previous_user:
-            context_parts.append(f"Pergunta anterior: {previous_user}")
-        if previous_assistant:
-            context_parts.append(f"Resumo anterior: {previous_assistant}")
+            context_parts.append(f"Referencia de conversa: {previous_user}")
         if not context_parts:
             return current_question
         return f"{current_question}\n\nContexto de conversa:\n" + "\n".join(
@@ -681,6 +729,13 @@ class ChatService:
             if any(term in text for text in normalized_texts):
                 matches += 1
         return matches >= 1
+
+    @staticmethod
+    def _is_generative_request(question: str) -> bool:
+        normalized = normalize_text(question)
+        if not normalized:
+            return False
+        return any(marker in normalized for marker in GENERATIVE_REQUEST_HINTS)
 
     def _build_extractive_fallback(
         self,
@@ -770,15 +825,27 @@ class ChatService:
             f"Sintese extraida diretamente das fontes recuperadas sobre '{topic}'."
         )
         if llm_error:
-            synopsis += " O modelo de geracao nao respondeu a tempo; resposta gerada no modo extrativo."
+            qa_target = self._requested_qa_count(question)
+            if qa_target:
+                synopsis += " Questionario montado diretamente a partir das citacoes recuperadas."
+            else:
+                synopsis += " O modelo de geracao nao respondeu a tempo; resposta gerada no modo extrativo."
 
-        qa = [
-            {
-                "question": question,
-                "answer": "Resposta extraida diretamente das fontes listadas.",
-                "citations": [claims[0]["citations"][0]],
-            }
-        ]
+        qa_target = self._requested_qa_count(question)
+        if qa_target:
+            qa = self._build_extractive_qa(
+                claims=claims,
+                focus_terms=focus_terms,
+                limit=qa_target,
+            )
+        else:
+            qa = [
+                {
+                    "question": question,
+                    "answer": "Resposta extraida diretamente das fontes listadas.",
+                    "citations": [claims[0]["citations"][0]],
+                }
+            ]
 
         return {
             "not_found": False,
@@ -788,6 +855,55 @@ class ChatService:
             "claims": claims,
             "sources": sources,
         }
+
+    @staticmethod
+    def _requested_qa_count(question: str) -> int | None:
+        normalized = normalize_text(question)
+        if not normalized:
+            return None
+        match = re.search(r"(\d{1,2})\s+(perguntas|questoes)", normalized)
+        if not match:
+            return None
+        try:
+            value = int(match.group(1))
+        except ValueError:
+            return None
+        if value <= 0:
+            return None
+        return min(value, 10)
+
+    def _build_extractive_qa(
+        self,
+        claims: list[dict[str, Any]],
+        focus_terms: list[str],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        if not claims or limit <= 0:
+            return []
+        topic = focus_terms[0] if focus_terms else "o tema"
+        templates = [
+            f"O que o texto afirma sobre {topic}?",
+            f"Como {topic} e descrito nas fontes?",
+            f"Qual caracteristica de {topic} aparece no material?",
+            f"Que explicacao as fontes apresentam sobre {topic}?",
+            f"Que relacao o texto estabelece com {topic}?",
+            f"Qual ponto importante sobre {topic} e citado?",
+        ]
+        qa: list[dict[str, Any]] = []
+        for idx in range(limit):
+            claim = claims[idx % len(claims)]
+            text = str(claim.get("text", "")).strip()
+            citations = claim.get("citations", [])
+            if not text or not isinstance(citations, list) or not citations:
+                continue
+            qa.append(
+                {
+                    "question": templates[idx % len(templates)],
+                    "answer": text,
+                    "citations": [citations[0]],
+                }
+            )
+        return qa
 
     def _enforce_coverage_distribution(
         self,
