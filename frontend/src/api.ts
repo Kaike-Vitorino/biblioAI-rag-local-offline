@@ -8,6 +8,7 @@ import type {
   DocItem,
   DocsResponse,
   HighlightResponse,
+  HealthResponse,
   IngestStatusResponse,
   UploadResponse
 } from "./types";
@@ -160,8 +161,8 @@ export async function getIngestJob(jobId: string): Promise<IngestStatusResponse>
   return http<IngestStatusResponse>(`/ingest/${encodeURIComponent(jobId)}`);
 }
 
-export async function getHealth(): Promise<{ status: string }> {
-  return http<{ status: string }>("/health");
+export async function getHealth(): Promise<HealthResponse> {
+  return http<HealthResponse>("/health");
 }
 
 export async function getHighlight(sourceId: string, snippet?: string): Promise<HighlightResponse> {

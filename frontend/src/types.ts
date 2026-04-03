@@ -156,3 +156,10 @@ export type SourceSelection = {
   method: string;
   highlightQuery?: string;
 };
+
+export type HealthResponse = {
+  status: string;
+  pid?: number;
+  build_hash?: string;
+  lan_url?: string;
+};

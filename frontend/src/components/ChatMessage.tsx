@@ -3,7 +3,7 @@ import type { ChatResponse, Citation, SourceUsed } from "../types";
 
 type ChatMessageProps = {
   response: ChatResponse;
-  onOpenSource: (source: SourceLike) => void;
+  onOpenSource: (source: SourceLike, orderedSources: SourceLike[]) => void;
 };
 
 function dedupeQuotes(citations: Citation[]): Citation[] {
@@ -76,11 +76,32 @@ function withHighlightQuery<T extends Citation | SourceUsed>(source: T, response
   };
 }
 
+function buildOrderedSources(response: ChatResponse): SourceLike[] {
+  const ordered: SourceLike[] = [];
+  const seen = new Set<string>();
+
+  const pushSource = (source: SourceLike) => {
+    const key = source.source_id;
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    ordered.push(withHighlightQuery(source, response));
+  };
+
+  response.suggested_qa.forEach((item) => item.citations.forEach(pushSource));
+  dedupeQuotes(response.claims.flatMap((claim) => claim.citations)).forEach(pushSource);
+  response.claims.forEach((claim) => claim.citations.forEach(pushSource));
+  response.sources.forEach(pushSource);
+  dedupeSources((response.all_references ?? response.sources) as SourceUsed[]).forEach(pushSource);
+
+  return ordered;
+}
+
 export default function ChatMessage({ response, onOpenSource }: ChatMessageProps) {
   const allCitations = response.claims.flatMap((claim) => claim.citations);
   const directQuotes = dedupeQuotes(allCitations).filter((citation) => citation.quote.trim().length > 0);
   const allReferences = dedupeSources((response.all_references ?? response.sources) as SourceUsed[]);
   const allReferenceDocs = new Set(allReferences.map((item) => item.doc_id)).size;
+  const orderedSources = buildOrderedSources(response);
 
   return (
     <div className={`assistant-card ${response.not_found ? "assistant-card-not-found" : ""}`}>
@@ -145,7 +166,11 @@ export default function ChatMessage({ response, onOpenSource }: ChatMessageProps
                     <p className="qa-answer">A: {item.answer}</p>
                     <div className="chips-row">
                       {item.citations.map((citation) => (
-                        <SourceChip key={`${citation.source_id}-${citation.quote}`} source={withHighlightQuery(citation, response)} onClick={onOpenSource} />
+                        <SourceChip
+                          key={`${citation.source_id}-${citation.quote}`}
+                          source={withHighlightQuery(citation, response)}
+                          onClick={(source) => onOpenSource(source, orderedSources)}
+                        />
                       ))}
                     </div>
                   </article>
@@ -164,7 +189,10 @@ export default function ChatMessage({ response, onOpenSource }: ChatMessageProps
                   <article key={`${citation.source_id}-${index}`} className="quote-item">
                     <blockquote>{citation.quote}</blockquote>
                     <div className="chips-row">
-                      <SourceChip source={withHighlightQuery(citation, response)} onClick={onOpenSource} />
+                      <SourceChip
+                        source={withHighlightQuery(citation, response)}
+                        onClick={(source) => onOpenSource(source, orderedSources)}
+                      />
                     </div>
                   </article>
                 ))}
@@ -183,7 +211,11 @@ export default function ChatMessage({ response, onOpenSource }: ChatMessageProps
                     <p>{claim.text}</p>
                     <div className="chips-row">
                       {claim.citations.map((citation) => (
-                        <SourceChip key={`${claim.claim_id}-${citation.source_id}`} source={withHighlightQuery(citation, response)} onClick={onOpenSource} />
+                        <SourceChip
+                          key={`${claim.claim_id}-${citation.source_id}`}
+                          source={withHighlightQuery(citation, response)}
+                          onClick={(source) => onOpenSource(source, orderedSources)}
+                        />
                       ))}
                     </div>
                   </article>
@@ -199,7 +231,11 @@ export default function ChatMessage({ response, onOpenSource }: ChatMessageProps
             {response.sources.length ? (
               <div className="chips-row">
                 {response.sources.map((source) => (
-                  <SourceChip key={source.source_id} source={withHighlightQuery(source, response)} onClick={onOpenSource} />
+                  <SourceChip
+                    key={source.source_id}
+                    source={withHighlightQuery(source, response)}
+                    onClick={(clickedSource) => onOpenSource(clickedSource, orderedSources)}
+                  />
                 ))}
               </div>
             ) : (
@@ -216,7 +252,11 @@ export default function ChatMessage({ response, onOpenSource }: ChatMessageProps
                 </p>
                 <div className="chips-row">
                   {allReferences.map((source) => (
-                      <SourceChip key={`all-${source.source_id}`} source={withHighlightQuery(source, response)} onClick={onOpenSource} />
+                    <SourceChip
+                      key={`all-${source.source_id}`}
+                      source={withHighlightQuery(source, response)}
+                      onClick={(clickedSource) => onOpenSource(clickedSource, orderedSources)}
+                    />
                   ))}
                 </div>
               </>

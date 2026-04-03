@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import socket
 import uuid
 from pathlib import Path
 
@@ -47,6 +48,26 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def _detect_lan_ip() -> str | None:
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.connect(("8.8.8.8", 80))
+        ip = sock.getsockname()[0]
+        sock.close()
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        return None
+    return None
+
+
+def _build_lan_url() -> str | None:
+    lan_ip = _detect_lan_ip()
+    if not lan_ip:
+        return None
+    return f"http://{lan_ip}:{settings.port}"
 
 app = FastAPI(
     title=settings.app_name,
@@ -93,6 +114,7 @@ def health() -> dict[str, str | int]:
         "status": "ok",
         "pid": os.getpid(),
         "build_hash": os.getenv("APP_BUILD_HASH", ""),
+        "lan_url": _build_lan_url() or "",
     }
 
 

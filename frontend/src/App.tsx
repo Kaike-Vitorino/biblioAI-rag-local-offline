@@ -10,7 +10,6 @@ import {
   getHighlight,
   getIngestJob,
   postChatMessage,
-  postChatMessageStream,
   renameChat,
   startIngest,
   updateDoc,
@@ -20,7 +19,7 @@ import {
 import ChatInput from "./components/ChatInput";
 import ChatMessage from "./components/ChatMessage";
 import SourceViewer from "./components/SourceViewer";
-import type { ChatHistoryMessage, ChatListItem, ChatResponse, DocItem, IngestStatusResponse, SourceSelection } from "./types";
+import type { ChatHistoryMessage, ChatListItem, ChatResponse, DocItem, HealthResponse, IngestStatusResponse, SourceSelection } from "./types";
 import type { SourceLike } from "./components/SourceChip";
 
 type UserTurn = {
@@ -102,6 +101,7 @@ function normalizeHistoryMessageToTurn(item: ChatHistoryMessage): Turn | null {
 
 export default function App() {
   const [backendStatus, setBackendStatus] = useState<"connecting" | "online" | "offline">("connecting");
+  const [healthInfo, setHealthInfo] = useState<HealthResponse | null>(null);
   const [chats, setChats] = useState<ChatListItem[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -128,6 +128,14 @@ export default function App() {
 
   const activeViewerSource = viewerSources.length ? viewerSources[Math.min(viewerIndex, viewerSources.length - 1)] : null;
   const viewerHasSources = viewerSources.length > 0;
+  const lanUrl = healthInfo?.lan_url?.trim() || "";
+
+  function clearViewer() {
+    setViewerError(null);
+    setViewerSources([]);
+    setViewerIndex(0);
+    setMobileViewerOpen(false);
+  }
 
   async function refreshDocs() {
     const data = await getDocs();
@@ -164,6 +172,7 @@ export default function App() {
         try {
           const health = await getHealth();
           if (cancelled) return;
+          setHealthInfo(health);
           if (health.status === "ok") {
             setBackendStatus("online");
             break;
@@ -177,6 +186,7 @@ export default function App() {
       try {
         const health = await getHealth();
         if (cancelled) return;
+        setHealthInfo(health);
         setBackendStatus(health.status === "ok" ? "online" : "offline");
       } catch {
         if (!cancelled) setBackendStatus("offline");
@@ -210,6 +220,7 @@ export default function App() {
     setChats((prev) => [created, ...prev.filter((item) => item.id !== created.id)]);
     setActiveChatId(created.id);
     setTurns([]);
+    clearViewer();
     setMenuChatId(null);
     setMobileSidebarOpen(false);
   }
@@ -223,6 +234,7 @@ export default function App() {
     setMenuChatId(null);
     setActiveChatId(chatId);
     setTurns([]);
+    clearViewer();
     await loadMessages(chatId);
     setMobileSidebarOpen(false);
   }
@@ -249,6 +261,7 @@ export default function App() {
     setChats(remaining);
     if (nextActive) {
       setActiveChatId(nextActive);
+      clearViewer();
       await loadMessages(nextActive);
     }
   }
@@ -368,34 +381,17 @@ export default function App() {
     const userTurn: UserTurn = { id: makeId("u"), role: "user", text: question };
     setTurns((prev) => [...prev, userTurn]);
     setLoading(true);
-    setStreamingContent(""); // Limpar conteúdo anterior
+    setStreamingContent("");
 
     try {
-      // Usar streaming para demonstração
-      const stream = postChatMessageStream(chatId, question);
-      let finalResponse: ChatResponse | null = null;
-
-      for await (const event of stream) {
-        if (event.type === "content") {
-          setStreamingContent((prev) => prev + (event.content || ""));
-        } else if (event.type === "final") {
-          finalResponse = event.response || null;
-        } else if (event.type === "error") {
-          throw new Error(event.message || "Erro no stream");
-        }
-      }
-
-      if (finalResponse) {
-        const assistantTurn: AssistantTurn = {
-          id: makeId("a"),
-          role: "assistant",
-          response: finalResponse
-        };
-        setTurns((prev) => [...prev, assistantTurn]);
-        setStreamingContent(""); // Limpar após adicionar
-      } else {
-        throw new Error("Nenhuma resposta recebida do servidor.");
-      }
+      const finalResponse = await postChatMessage(chatId, question);
+      const assistantTurn: AssistantTurn = {
+        id: makeId("a"),
+        role: "assistant",
+        response: finalResponse
+      };
+      setTurns((prev) => [...prev, assistantTurn]);
+      setStreamingContent("");
 
       const refreshed = await getChats();
       setChats(refreshed.chats);
@@ -413,38 +409,38 @@ export default function App() {
     }
   }
 
-  async function openSource(source: SourceLike) {
+  async function openSource(source: SourceLike, orderedSources: SourceLike[] = [source]) {
     setViewerError(null);
     try {
-      const sourceQuote = "quote" in source ? source.quote : "";
-      const details = await getHighlight(source.source_id, sourceQuote);
-      const first = details.highlights[0];
-      const page = first?.page_number ?? source.page_start ?? details.page_start;
-      const snippet = first?.snippet ?? sourceQuote ?? "";
-      const fileName = source.file_name ?? details.doc_id;
-      const selection: SourceSelection = {
-        sourceId: source.source_id,
-        docId: details.doc_id,
-        fileName,
-        pageNumber: page,
-        snippet,
-        isPdf: fileName.toLowerCase().endsWith(".pdf"),
-        start: first?.start,
-        end: first?.end,
-        method: details.method,
-        highlightQuery: "highlight_query" in source ? source.highlight_query : undefined,
-      };
-      const key = `${selection.sourceId}::${selection.pageNumber}`;
-      setViewerSources((prev) => {
-        const existingIndex = prev.findIndex((item) => `${item.sourceId}::${item.pageNumber}` === key);
-        if (existingIndex >= 0) {
-          setViewerIndex(existingIndex);
-          return prev;
-        }
-        const next = [selection, ...prev];
-        setViewerIndex(0);
-        return next.slice(0, 30);
-      });
+      const uniqueOrderedSources = orderedSources.filter(
+        (item, index, arr) => arr.findIndex((candidate) => candidate.source_id === item.source_id) === index
+      );
+      const selections = await Promise.all(
+        uniqueOrderedSources.map(async (item) => {
+          const sourceQuote = "quote" in item ? item.quote : "";
+          const details = await getHighlight(item.source_id, sourceQuote);
+          const first = details.highlights[0];
+          const page = first?.page_number ?? item.page_start ?? details.page_start;
+          const snippet = first?.snippet ?? sourceQuote ?? "";
+          const fileName = item.file_name ?? details.doc_id;
+          const selection: SourceSelection = {
+            sourceId: item.source_id,
+            docId: details.doc_id,
+            fileName,
+            pageNumber: page,
+            snippet,
+            isPdf: fileName.toLowerCase().endsWith(".pdf"),
+            start: first?.start,
+            end: first?.end,
+            method: details.method,
+            highlightQuery: "highlight_query" in item ? item.highlight_query : undefined,
+          };
+          return selection;
+        })
+      );
+      const nextIndex = Math.max(0, selections.findIndex((item) => item.sourceId === source.source_id));
+      setViewerSources(selections);
+      setViewerIndex(nextIndex);
       setMobileViewerOpen(true);
     } catch (error) {
       setViewerError(error instanceof Error ? error.message : "Falha ao abrir fonte.");
@@ -513,6 +509,15 @@ export default function App() {
   }
 
   const activeChat = useMemo(() => chats.find((item) => item.id === activeChatId) ?? null, [chats, activeChatId]);
+
+  async function copyLanUrl() {
+    if (!lanUrl) return;
+    try {
+      await navigator.clipboard.writeText(lanUrl);
+    } catch {
+      // Keep the link visible even if clipboard access fails.
+    }
+  }
 
   return (
     <div className={`app-root ${readerMode ? "reader-mode" : ""}`}>
@@ -714,6 +719,20 @@ export default function App() {
             </button>
           </div>
         </header>
+
+        {lanUrl ? (
+          <div className="network-overlay">
+            <div className="network-overlay-copy">
+              <span className="network-overlay-label">Acesso pela rede da casa</span>
+              <button type="button" className="small-action" onClick={() => void copyLanUrl()}>
+                Copiar link
+              </button>
+            </div>
+            <a className="network-overlay-link" href={lanUrl} target="_blank" rel="noreferrer">
+              {lanUrl}
+            </a>
+          </div>
+        ) : null}
 
         {backendStatus === "connecting" ? <p className="status-line">Conectando ao backend...</p> : null}
         {backendStatus === "offline" ? <p className="status-line error-text">Backend indisponivel.</p> : null}

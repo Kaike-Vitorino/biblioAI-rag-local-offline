@@ -46,6 +46,33 @@ JSON_SCHEMA_HINT = {
     ],
 }
 
+GENERATIVE_TASK_MARKERS = {
+    "monte",
+    "montar",
+    "crie",
+    "criar",
+    "gere",
+    "gerar",
+    "faca",
+    "fazer",
+    "elabore",
+    "elaborar",
+    "escreva",
+    "escrever",
+    "produza",
+    "produzir",
+    "formule",
+    "formular",
+    "organize",
+    "organizar",
+    "questoes",
+    "questionario",
+    "perguntas",
+    "respostas",
+    "lista",
+    "roteiro",
+}
+
 
 EVIDENCE_VALIDATION_SCHEMA_HINT = {
     "keep_source_ids": ["string"],
@@ -82,7 +109,7 @@ class LLMService:
             "format": "json",
             "options": {
                 "temperature": self.settings.temperature,
-                "num_ctx": self.settings.num_ctx,
+                "num_ctx": min(self.settings.num_ctx, 4096),
             },
         }
         response = requests.post(
@@ -125,7 +152,7 @@ class LLMService:
             "format": "json",
             "options": {
                 "temperature": self.settings.temperature,
-                "num_ctx": self.settings.num_ctx,
+                "num_ctx": min(self.settings.num_ctx, 4096),
             },
         }
         try:
@@ -258,7 +285,10 @@ class LLMService:
         evidence_lines = []
         available_docs: list[str] = []
         seen_docs: set[str] = set()
-        for ev in evidences:
+        qa_target = self._requested_qa_count(question)
+        is_generative_task = self._is_generative_task(question)
+        prompt_evidences = evidences[:6]
+        for ev in prompt_evidences:
             evidence_lines.append(
                 {
                     "source_id": ev["source_id"],
@@ -268,7 +298,7 @@ class LLMService:
                     "file_path": ev["file_path"],
                     "page_start": ev["page_start"],
                     "page_end": ev["page_end"],
-                    "text": ev["text"],
+                    "text": self._compact_evidence_text(str(ev["text"])),
                 }
             )
             doc_name = str(ev.get("file_name", ""))
@@ -297,6 +327,30 @@ class LLMService:
             if not role or not content:
                 continue
             history_lines.append({"role": role, "content": content[:700]})
+        schema_hint = dict(JSON_SCHEMA_HINT)
+        if qa_target:
+            schema_hint["suggested_qa"] = [
+                {
+                    "question": f"string (gere exatamente {qa_target} itens quando houver evidencia suficiente)",
+                    "answer": "string",
+                    "citations": [{"source_id": "string", "quote": "string"}],
+                }
+            ]
+        task_instruction = ""
+        if is_generative_task:
+            task_instruction = (
+                "\n5) A pergunta pede uma saida composta pelo modelo, como lista, questionario ou roteiro."
+                "\n6) Monte a resposta final a partir das evidencias, sem copiar a pergunta como unica sugestao."
+                "\n7) Voce PODE reorganizar, resumir e redigir perguntas/respostas derivadas das evidencias, desde que todas permanecam ancoradas nas citacoes."
+            )
+            if qa_target:
+                task_instruction += (
+                    f"\n8) Gere exatamente {qa_target} itens em suggested_qa se houver material suficiente."
+                )
+        limits_instruction = (
+            f"3) Mantenha no maximo 5 key_points, {qa_target or 3} suggested_qa e 6 claims.\n"
+            "4) Se nao houver evidencia suficiente, retorne not_found=true e arrays vazios."
+        )
         return (
             "Pergunta do usuario:\n"
             f"{question}\n\n"
@@ -309,15 +363,41 @@ class LLMService:
             "EVIDENCIAS (somente estas podem ser usadas):\n"
             f"{json.dumps(evidence_lines, ensure_ascii=False)}\n\n"
             "Schema JSON obrigatorio:\n"
-            f"{json.dumps(JSON_SCHEMA_HINT, ensure_ascii=False)}\n\n"
+            f"{json.dumps(schema_hint, ensure_ascii=False)}\n\n"
             "Regras adicionais de resposta:\n"
             "1) Cada claim deve citar explicitamente o tema da pergunta ou sinonimo direto presente nas evidencias.\n"
             "2) Evite claims genericas que nao sustentem o foco.\n"
-            "3) Mantenha no maximo 5 key_points, 3 suggested_qa e 6 claims.\n"
-            "4) Se nao houver evidencia suficiente, retorne not_found=true e arrays vazios."
+            f"{limits_instruction}"
+            f"{task_instruction}"
             f"{coverage_instruction}"
             f"{retry_instruction}"
         )
+
+    @staticmethod
+    def _requested_qa_count(question: str) -> int | None:
+        normalized = re.sub(r"\s+", " ", question.lower())
+        match = re.search(r"(\d{1,2})\s+(?:perguntas|questoes|questões)", normalized)
+        if not match:
+            return None
+        try:
+            value = int(match.group(1))
+        except ValueError:
+            return None
+        if value <= 0:
+            return None
+        return min(value, 10)
+
+    @staticmethod
+    def _is_generative_task(question: str) -> bool:
+        normalized = re.sub(r"\s+", " ", question.lower())
+        return any(marker in normalized for marker in GENERATIVE_TASK_MARKERS)
+
+    @staticmethod
+    def _compact_evidence_text(text: str, max_chars: int = 700) -> str:
+        compact = re.sub(r"\s+", " ", text or "").strip()
+        if len(compact) <= max_chars:
+            return compact
+        return compact[:max_chars].rstrip() + "..."
 
     @staticmethod
     def _parse_json(raw: str) -> dict[str, Any] | None:
